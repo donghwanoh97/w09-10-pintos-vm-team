@@ -3,6 +3,7 @@
 #include "threads/malloc.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
+#include "lib/kernel/hash.h"
 
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
@@ -74,7 +75,7 @@ spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 	struct hash_elem *e = hash_find(&spt->hash, &temp.hash_elem); 
 	if (e == NULL)
 		return NULL;
-	page = hash_entry(e, page, page->hash_elem);
+	page = hash_entry(e, struct page, hash_elem);
 	return page;
 }
 
@@ -85,7 +86,7 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED,
 	int succ = false;
 	/* TODO: 이 함수를 채울 것. */
 	/* spt의 hash에 현재 페이지를 넣는다. */
-	struct hash_elem *old = hash_insert(&spt->hash, page->hash_elem);
+	struct hash_elem *old = hash_insert(&spt->hash, &page->hash_elem);
 	if (old == NULL)
 		return succ == true;
 }
@@ -219,7 +220,7 @@ vm_do_claim_page (struct page *page) {
 void
 supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 	ASSERT(spt);
-	hash_init(spt->hash);
+	hash_init(&spt->hash, hash_hash_func, hash_less_func, NULL);
 }
 
 /* src의 보조 페이지 테이블을 dst로 복사한다 */
@@ -231,7 +232,7 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 
     while (hash_next (&i)) {
         struct hash_elem *e = hash_cur (&i);
-        struct page *page = hash_entry (e, page, page->hash_elem);
+        struct page *page = hash_entry(e, struct page, hash_elem);
 	    /* 1. 원본 페이지의 타입과 초기화 정보 확인 */
 	    /* 2. 타입에 맞게 자식 페이지 생성 및 SPT 등록 */
 	    /* 3. 페이지 종류에 따라 초기화 정보 또는 메모리 내용 복사 */
@@ -243,7 +244,7 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 /* 해시 요소에 해당하는 페이지를 정리한다. */
 static void
 page_destroy (struct hash_elem *e, void *aux UNUSED) {
-    struct page *page = hash_entry (e, page, page->hash_elem);
+    struct page *page = hash_entry(e, struct page, hash_elem);
     destroy (page);
     free (page);
 }
@@ -254,5 +255,5 @@ void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
 	/* TODO: 스레드가 가진 보조 페이지 테이블의 내용을 모두 없애고,
 	 * TODO: 수정된 내용은 모두 저장소에 다시 써 준다(write-back). */
-	hash_clear(&spt->hash, page_destory());
+	hash_clear(&spt->hash, page_destroy);
 }
