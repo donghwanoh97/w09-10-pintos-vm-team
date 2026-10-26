@@ -67,23 +67,33 @@ err:
 struct page *
 spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 	struct page *page = NULL;
-	/* TODO: 이 함수를 채울 것. */
-	hash_find(spt, page);
+	ASSERT(spt && va);
+	struct page temp = {0};
+	temp.va = va;
+	// find 결과 확인 후 엔트리 변환
+	struct hash_elem *e = hash_find(&spt->hash, &temp.hash_elem); 
+	if (e == NULL)
+		return NULL;
+	page = hash_entry(e, page, page->hash_elem);
 	return page;
 }
 
-/* 검증을 거쳐 PAGE를 spt에 넣는다. */
+/* 검증을 거쳐 PAGE를 spt에 넣는다. 검증은 vm_try_handle_fault에서 처리하는 것으로 구현 */
 bool
 spt_insert_page (struct supplemental_page_table *spt UNUSED,
 		struct page *page UNUSED) {
 	int succ = false;
 	/* TODO: 이 함수를 채울 것. */
-	hash_insert(page);
-	return succ;
+	/* spt의 hash에 현재 페이지를 넣는다. */
+	struct hash_elem *old = hash_insert(&spt->hash, page->hash_elem);
+	if (old == NULL)
+		return succ == true;
 }
 
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
+	ASSERT(spt && page);
+	ASSERT(spt_find_page(spt, page->va) == page);
 	vm_dealloc_page (page);
 	return true;
 }
@@ -214,14 +224,35 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 
 /* src의 보조 페이지 테이블을 dst로 복사한다 */
 bool
-supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
-		struct supplemental_page_table *src UNUSED) {
+supplemental_page_table_copy (struct supplemental_page_table *dst,
+                              struct supplemental_page_table *src) {
+    struct hash_iterator i;
+    hash_first (&i, &src->hash);
+
+    while (hash_next (&i)) {
+        struct hash_elem *e = hash_cur (&i);
+        struct page *page = hash_entry (e, page, page->hash_elem);
+	    /* 1. 원본 페이지의 타입과 초기화 정보 확인 */
+	    /* 2. 타입에 맞게 자식 페이지 생성 및 SPT 등록 */
+	    /* 3. 페이지 종류에 따라 초기화 정보 또는 메모리 내용 복사 */
+	    /* 4. 페이지 생성이나 복사에 실패하면 false 반환 */
+    }
+    return true;
 }
+
+/* 해시 요소에 해당하는 페이지를 정리한다. */
+static void
+page_destroy (struct hash_elem *e, void *aux UNUSED) {
+    struct page *page = hash_entry (e, page, page->hash_elem);
+    destroy (page);
+    free (page);
+}
+
 
 /* 보조 페이지 테이블이 가진 자원을 해제한다 */
 void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
 	/* TODO: 스레드가 가진 보조 페이지 테이블의 내용을 모두 없애고,
 	 * TODO: 수정된 내용은 모두 저장소에 다시 써 준다(write-back). */
-
+	hash_clear(&spt->hash, page_destory());
 }
