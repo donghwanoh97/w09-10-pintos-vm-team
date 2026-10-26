@@ -2,7 +2,7 @@
 #define VM_VM_H
 #include <stdbool.h>
 #include "threads/palloc.h"
-
+#include "lib/kernel/hash.h"
 enum vm_type {
 	/* 아직 초기화되지 않은 페이지 */
 	VM_UNINIT = 0,
@@ -47,7 +47,7 @@ struct page {
 	struct frame *frame;   /* frame을 거꾸로 가리키는 포인터 */
 
 	/* 여기에 직접 구현할 필드를 추가 */
-	struct hash_elem *hash_elem;
+	struct hash_elem hash_elem;
 	/* 타입별 데이터는 union으로 묶여 있다.
 	 * 각 함수가 현재 어떤 union 멤버인지 자동으로 알아낸다. */
 	union {
@@ -87,7 +87,7 @@ struct page_operations {
  * 이 구조체에 특정 설계를 강요하지 않는다.
  * 설계는 전부 여러분에게 맡긴다. */
 struct supplemental_page_table {
-	struct hash *hash;
+	struct hash hash;
 };
 
 #include "threads/thread.h"
