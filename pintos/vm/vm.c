@@ -70,8 +70,8 @@ err:
 struct page *
 spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 	struct page *page = NULL;
-	ASSERT(spt && va);
-	struct page temp = {.va = va};
+	ASSERT(spt);
+	struct page temp = {.va = pg_round_down(va)};
 	// find 결과 확인 후 엔트리 변환
 	struct hash_elem *e = hash_find(&spt->hash, &temp.hash_elem); 
 	if (e == NULL)
@@ -97,8 +97,8 @@ void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	ASSERT(spt && page);
 	ASSERT(spt_find_page(spt, page->va) == page);
+	hash_delete(&spt->hash, &page->hash_elem);
 	vm_dealloc_page (page);
-	return true;
 }
 
 /* 내보낼(evict) struct frame을 고른다. */
@@ -250,7 +250,7 @@ void
 supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 	ASSERT(spt);
 	hash_init(&spt->hash, page_hash, page_less, NULL);
-
+	PANIC("SPT hash 초기화 실패");
 }
 
 /* src의 보조 페이지 테이블을 dst로 복사한다 */
