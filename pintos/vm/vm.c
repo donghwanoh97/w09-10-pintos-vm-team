@@ -65,6 +65,7 @@ err:
 struct page *
 spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
   ASSERT(spt && va);
+  ASSERT(spt->initialized);
 	if (va >= KERN_BASE) return NULL;
 
   struct page *page = NULL;
@@ -82,6 +83,7 @@ bool
 spt_insert_page (struct supplemental_page_table *spt UNUSED,
 		struct page *page UNUSED) {
   ASSERT(spt && page);
+  ASSERT(spt->initialized);
   int succ = false;
 	
 	struct hash_elem *old = hash_insert(&spt->hash, &page->elem);	
@@ -93,6 +95,7 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED,
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
   ASSERT(spt && page);
+  ASSERT(spt->initialized);
 	ASSERT(spt_find_page(spt, page->va) == page);
 
   vm_dealloc_page (page);
@@ -124,8 +127,25 @@ vm_evict_frame (void) {
  * space.*/
 static struct frame *
 vm_get_frame (void) {
-	struct frame *frame = NULL;
-	/* TODO: Fill this function. */
+	struct frame *frame = malloc(sizeof(struct frame));
+  if (!frame)
+    sys_exit(-1);
+  
+  void *kva = palloc_get_page(PAL_USER | PAL_ZERO);
+
+  if (!kva) 
+    PANIC("todo"); // search a free fame from the frame table
+
+  if (!kva)
+    PANIC("todo"); // apply eviction policy 
+
+  if (!kva)        // eviction failed due to the lack of swap slot
+    sys_exit(-1);
+      
+  frame->kva = kva;
+  frame->page = NULL;
+
+  // update frame table if needed;
 
 	ASSERT (frame != NULL);
 	ASSERT (frame->page == NULL);
@@ -148,8 +168,20 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
 		bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
 	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
 	struct page *page = NULL;
-	/* TODO: Validate the fault */
-	/* TODO: Your code goes here */
+
+  if (!not_present) return false; // COW 구현 시 수정 필요
+  
+  void *va = pg_round_down(addr);
+
+  if (user && (va > USER_STACK || va < 0x00400000))   // 사용자가 접근했으나, 사용자 영역이 아님
+      return false;
+  
+  page = spt_find_page(spt, va);  // 미매핑 구역
+  if (!page)
+      return false;
+
+  if (!page->writable && write)     // 쓰기 권한 없는 영역에 쓰기 시도
+      return false;
 
 	return vm_do_claim_page (page);
 }
@@ -165,8 +197,9 @@ vm_dealloc_page (struct page *page) {
 /* Claim the page that allocate on VA. */
 bool
 vm_claim_page (void *va UNUSED) {
-	struct page *page = NULL;
-	/* TODO: Fill this function */
+	struct page *page = spt_find_page(&thread_current()->spt, va);
+  if (!page) 
+    return false;  
 
 	return vm_do_claim_page (page);
 }
@@ -174,13 +207,17 @@ vm_claim_page (void *va UNUSED) {
 /* Claim the PAGE and set up the mmu. */
 static bool
 vm_do_claim_page (struct page *page) {
+  ASSERT(page);
+
 	struct frame *frame = vm_get_frame ();
 
 	/* Set links */
 	frame->page = page;
 	page->frame = frame;
 
-	/* TODO: Insert page table entry to map page's VA to frame's PA. */
+  bool succ = pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable);
+  if (!succ)
+    sys_exit(-1);
 
 	return swap_in (page, frame->kva);
 }
@@ -287,7 +324,7 @@ fail_malloc:
 void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
   ASSERT(spt);
-  if (!spt->initialized) return;
+  ASSERT(spt->initialized);
 
   spt->initialized = false;
   hash_destroy(&spt->hash, page_destroy);

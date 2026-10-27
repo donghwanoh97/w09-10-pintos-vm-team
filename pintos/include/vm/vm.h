@@ -47,6 +47,7 @@ struct page {
 	struct frame *frame;   /* Back reference for frame */
 
 	/* Your implementation */
+  bool writable;
   struct hash_elem elem;
 
 	/* Per-type data are binded into the union.
