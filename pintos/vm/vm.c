@@ -5,6 +5,7 @@
 #include "vm/inspect.h"
 #include "lib/kernel/hash.h"
 #include "include/threads/vaddr.h"
+#include "include/threads/thread.h"
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
 void
@@ -122,13 +123,19 @@ vm_evict_frame (void) {
 /* palloc()으로 frame을 얻는다. 사용 가능한 페이지가 없으면 페이지를 내보내고
  * 그 frame을 돌려준다. 이 함수는 항상 유효한 주소를 돌려준다. 즉,
  * user pool 메모리가 가득 차면 frame을 내보내서 사용 가능한
- * 메모리 공간을 만든다. */
+ * 메모리 공간을 만든다. 
+ */
 static struct frame *
 vm_get_frame (void) {
 	struct frame *frame = NULL;
-	/* TODO: 이 함수를 채울 것. */
-
+	void *kva = palloc_get_page(PAL_USER | PAL_ZERO);
+	if (!kva)
+		PANIC("todo"); // swap단계에서 vm_evict_frame으로 교체
+	frame = malloc(sizeof(struct frame));
+	/* malloc 실패는 커널 메모리 부족이라 PANIC */
 	ASSERT (frame != NULL);
+	frame->kva = kva;
+	frame->page = NULL; /* 연결은 vm_do_claim_page에서 */
 	ASSERT (frame->page == NULL);
 	return frame;
 }
@@ -190,8 +197,10 @@ vm_dealloc_page (struct page *page) {
 bool
 vm_claim_page (void *va UNUSED) {
 	struct page *page = NULL;
-	/* TODO: 이 함수를 채울 것 */
-
+	struct supplemental_page_table *spt = &thread_current()->spt;
+	page = spt_find_page(spt, va);
+	if (page == NULL) 
+		return false;
 	return vm_do_claim_page (page);
 }
 
@@ -199,14 +208,25 @@ vm_claim_page (void *va UNUSED) {
 static bool
 vm_do_claim_page (struct page *page) {
 	struct frame *frame = vm_get_frame ();
-
-	/* 서로를 가리키게 연결한다 */
+	uint64_t *pml4 = thread_current()->pml4;
+	/* va -> frame 매핑 (PTE)를 추가함 */
+	if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
+		palloc_free_page(frame->kva);
+		free(frame);
+		return false;
+	}
 	frame->page = page;
 	page->frame = frame;
-
-	/* TODO: 페이지의 VA를 frame의 PA로 매핑하는 페이지 테이블 항목을 넣는다. */
-
-	return swap_in (page, frame->kva);
+	/* page type에 맞는 함수로 frame(kva)에 내용을 채움. 실패하면 되돌림 */
+	if (!swap_in (page, frame->kva)) {
+			pml4_clear_page(pml4, page->va);
+			page->frame = NULL;
+			frame->page = NULL;			
+			palloc_free_page(frame->kva); /* frame을 free하기 전에 kva 먼저 */
+			free(frame);
+			return false;
+	}
+	return true;
 }
 /* Returns a hash value for page p. */
 unsigned
@@ -228,7 +248,7 @@ void
 supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 	ASSERT(spt);
 	hash_init(&spt->hash, page_hash, page_less, NULL);
-	
+
 }
 
 /* src의 보조 페이지 테이블을 dst로 복사한다 */
