@@ -85,7 +85,7 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED,
   int succ = false;
 	
 	struct hash_elem *old = hash_insert(&spt->hash, &page->elem);	
-	int succ = (old == NULL);
+	succ = (old == NULL);
 
 	return succ;
 }
@@ -193,7 +193,7 @@ static void page_destroy(const struct hash_elem *e, void *aux);
 void
 supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
   ASSERT(spt);
-  
+
   int succ = hash_init(&spt->hash, page_hash_func, page_less_func, NULL);
 
   if (!succ){
