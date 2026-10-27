@@ -88,6 +88,7 @@ struct page_operations {
  * All designs up to you for this. */
 struct supplemental_page_table {
   struct hash hash;
+  bool initialized;
 };
 
 #include "threads/thread.h"

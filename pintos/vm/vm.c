@@ -187,7 +187,7 @@ vm_do_claim_page (struct page *page) {
 
 static uint64_t page_hash_func (const struct hash_elem *e, void *aux);
 static bool page_less_func(const struct hash_elem *a, const struct hash_elem *b, void *aux);
-static void page_destroy(const struct hash_elem *e, void *aux);
+static void page_destroy(struct hash_elem *e, void *aux);
 
 /* Initialize new supplemental page table */
 void
@@ -195,6 +195,7 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
   ASSERT(spt);
 
   int succ = hash_init(&spt->hash, page_hash_func, page_less_func, NULL);
+  spt->initialized = succ;
 
   if (!succ){
     sys_exit(-1);
@@ -286,7 +287,9 @@ fail_malloc:
 void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
   ASSERT(spt);
+  if (!spt->initialized) return;
 
+  spt->initialized = false;
   hash_destroy(&spt->hash, page_destroy);
 }
 
@@ -307,8 +310,8 @@ page_less_func(const struct hash_elem *a,
 }
 
 static void 
-page_destroy(const struct hash_elem *e, void *aux){
-  const struct page *p = hash_entry(e, struct page, elem);
+page_destroy(struct hash_elem *e, void *aux){
+  struct page *p = hash_entry(e, struct page, elem);
   
   vm_dealloc_page(p);
 }

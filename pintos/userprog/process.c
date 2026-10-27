@@ -416,7 +416,9 @@ process_exec (void *f_name) {
 	process_cleanup();
 
 	/* 그런 다음 바이너리를 로드함 */
-
+#ifdef VM
+  supplemental_page_table_init(&thread_current()->spt);
+#endif
 	success = load(file_name, &_if);
 
 	/* 로드에 실패하면 종료함. */
