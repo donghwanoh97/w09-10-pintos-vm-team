@@ -66,7 +66,6 @@ struct page *
 spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
   ASSERT(spt && va);
   ASSERT(spt->initialized);
-	if (va >= KERN_BASE) return NULL;
 
   struct page *page = NULL;
   struct page temp = {.va = va};
