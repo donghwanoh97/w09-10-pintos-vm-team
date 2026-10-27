@@ -4,7 +4,7 @@
 #include "vm/vm.h"
 #include "vm/inspect.h"
 #include "lib/kernel/hash.h"
-
+#include "include/threads/vaddr.h"
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
 void
@@ -51,11 +51,12 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 
 	/* upage가 이미 사용 중인지 확인한다. */
 	if (spt_find_page (spt, upage) == NULL) {
-		/* TODO: 페이지를 만들고, VM 타입에 맞는 initializer를 가져온 다음,
+		/* TODO: 페이지를 만들고, VM 타입에 맞는 initializer를 가져온 다음 */
 		 
 		 /* TODO: uninit_new를 불러 "uninit" 페이지 구조체를 만든다.*/
 		 
 		 /* TODO: uninit_new를 부른 뒤에 필드를 수정해야 한다. */
+		 // page->writable = writable;//
 
 		/* TODO: 페이지를 spt에 넣는다. */
 		
@@ -69,8 +70,7 @@ struct page *
 spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 	struct page *page = NULL;
 	ASSERT(spt && va);
-	struct page temp = {0};
-	temp.va = va;
+	struct page temp = {.va = va};
 	// find 결과 확인 후 엔트리 변환
 	struct hash_elem *e = hash_find(&spt->hash, &temp.hash_elem); 
 	if (e == NULL)
@@ -79,7 +79,7 @@ spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 	return page;
 }
 
-/* 검증을 거쳐 PAGE를 spt에 넣는다. 검증은 vm_try_handle_fault에서 처리하는 것으로 구현 */
+/* 검증을 거쳐 PAGE를 spt에 넣는다. 주소 유효성 검증은 vm_try_handle_fault에서 처리하는 것으로 구현 */
 bool
 spt_insert_page (struct supplemental_page_table *spt UNUSED,
 		struct page *page UNUSED) {
@@ -88,7 +88,8 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED,
 	/* spt의 hash에 현재 페이지를 넣는다. */
 	struct hash_elem *old = hash_insert(&spt->hash, &page->hash_elem);
 	if (old == NULL)
-		return succ == true;
+		succ = true;
+	return succ;
 }
 
 void
@@ -142,8 +143,7 @@ static bool
 vm_handle_wp (struct page *page UNUSED) {
 }
 
-/* 성공하면 true를 돌려준다. */
-/* 폴트 유효성 검사에 성공하면 true를 돌려준다. */
+/* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
 bool
 vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
 		bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
@@ -154,17 +154,15 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
 	/* 1. 사용자 주소 범위 확인 */
 	if (!is_user_vaddr(addr))
 		return false;
-	/* 2. 페이지 부재 폴트인지 확인 */
-	if (!not_present)
-		return false;
-	/* 3. spt에서 검색하여, 페이지 시작 주소 계산 */
+	/* 2. spt에서 검색하여, 페이지 시작 주소 계산 */
 	void *page_addr = pg_round_down(addr); 
 	page = spt_find_page(spt, page_addr);
-	
+	/* 3. 페이지 부재 폴트인지 확인 */
+	if (!not_present)
+		return false;
 	/* 4. 페이지가 없으면*/
 	if (page == NULL) {
-		// 스택 확장 조건 검사 - 스택을 키우는 함수
-		// if (!vm_stack_growth(addr))
+		// 스택 확장 조건 검사 
 			// 조건을 만족하면 새 스택 페이지 생성
 			// return false;
 		// 생성한 페이지를 SPT에서 다시 검색
@@ -173,17 +171,12 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
 		if (page == NULL)
 			return false;
 	}
-	/* 5. 쓰기 권한 확인 - 페이지 등록시에, 권한을 저장하면 아래 실행 가능 */
-	//if (write && !page->writable)
-		// return false;
-	/* 6. 유저의 접근인지 확인함 */ 
-	if (!user) {
-		// 커널 접근이라면
-	}
-	/* 7. 프레임 확보 및 매핑 */
+	/* 5. 쓰기 권한 확인 - page 구조체에 권한을 저장하면 아래 실행 가능 */
+	if (write && !page->writable)
+		return false;
+	/* 5. 프레임 확보 및 매핑 */
 	return vm_do_claim_page (page);
 }
-
 
 /* 페이지를 해제한다.
  * 이 함수는 수정하지 말 것. */
@@ -215,12 +208,27 @@ vm_do_claim_page (struct page *page) {
 
 	return swap_in (page, frame->kva);
 }
+/* Returns a hash value for page p. */
+unsigned
+page_hash (const struct hash_elem *p_, void *aux UNUSED) {
+	const struct page *p = hash_entry (p_, struct page, hash_elem);
+  return hash_bytes (&p->va, sizeof p->va);
+}
+/* Returns true if page a precedes page b. */
+bool
+page_less (const struct hash_elem *a_,
+           const struct hash_elem *b_, void *aux UNUSED) {
+  const struct page *a = hash_entry (a_, struct page, hash_elem);
+  const struct page *b = hash_entry (b_, struct page, hash_elem);
 
+  return a->va < b->va;
+}
 /* 새 보조 페이지 테이블을 초기화한다 */
 void
 supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 	ASSERT(spt);
-	hash_init(&spt->hash, hash_hash_func, hash_less_func, NULL);
+	hash_init(&spt->hash, page_hash, page_less, NULL);
+	
 }
 
 /* src의 보조 페이지 테이블을 dst로 복사한다 */
@@ -235,7 +243,7 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
         struct page *page = hash_entry(e, struct page, hash_elem);
 	    /* 1. 원본 페이지의 타입과 초기화 정보 확인 */
 	    /* 2. 타입에 맞게 자식 페이지 생성 및 SPT 등록 */
-	    /* 3. 페이지 종류에 따라 초기화 정보 또는 메모리 내용 복사 */
+	    /* 3. 페이지 종류에 따라 초기화 정보 또는 메모리 내용 복사 - 조금 더 고민 /
 	    /* 4. 페이지 생성이나 복사에 실패하면 false 반환 */
     }
     return true;
@@ -255,5 +263,5 @@ void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
 	/* TODO: 스레드가 가진 보조 페이지 테이블의 내용을 모두 없애고,
 	 * TODO: 수정된 내용은 모두 저장소에 다시 써 준다(write-back). */
-	hash_clear(&spt->hash, page_destroy);
+	hash_destroy(&spt->hash, page_destroy);
 }

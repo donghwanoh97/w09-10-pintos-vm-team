@@ -48,6 +48,7 @@ struct page {
 
 	/* 여기에 직접 구현할 필드를 추가 */
 	struct hash_elem hash_elem;
+	bool writable; /*쓰기 가능한 페이지인지 */
 	/* 타입별 데이터는 union으로 묶여 있다.
 	 * 각 함수가 현재 어떤 union 멤버인지 자동으로 알아낸다. */
 	union {
