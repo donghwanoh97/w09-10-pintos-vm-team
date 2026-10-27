@@ -249,8 +249,8 @@ page_less (const struct hash_elem *a_,
 void
 supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 	ASSERT(spt);
-	hash_init(&spt->hash, page_hash, page_less, NULL);
-	PANIC("SPT hash 초기화 실패");
+	if (!hash_init(&spt->hash, page_hash, page_less, NULL))
+		PANIC("SPT hash 초기화 실패");
 }
 
 /* src의 보조 페이지 테이블을 dst로 복사한다 */
