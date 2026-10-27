@@ -151,9 +151,10 @@ vm_handle_wp (struct page *page UNUSED) {
 }
 
 /* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
+/* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
 bool
-vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
-		bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
+vm_try_handle_fault (struct intr_frame *f, void *addr,
+		bool user, bool write, bool not_present) {
 	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
 	struct page *page = NULL;
 	ASSERT(spt);
@@ -161,29 +162,30 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
 	/* 1. 사용자 주소 범위 확인 */
 	if (!is_user_vaddr(addr))
 		return false;
-	/* 2. spt에서 검색하여, 페이지 시작 주소 계산 */
-	void *page_addr = pg_round_down(addr); 
-	page = spt_find_page(spt, page_addr);
-	/* 3. 페이지 부재 폴트인지 확인 */
+	/* 2. 페이지 부재 폴트인지 확인 */
 	if (!not_present)
 		return false;
+	/* 3. 페이지 시작 주소를 계산해서 spt에서 검색 */
+	void *page_addr = pg_round_down(addr); 
+	page = spt_find_page(spt, page_addr);
 	/* 4. 페이지가 없으면*/
 	if (page == NULL) {
 		// 스택 확장 조건 검사 
-			// 조건을 만족하면 새 스택 페이지 생성
-			// return false;
+			// 조건을 만족하지 않으면 return false;
+			// 만족하면 vm_stack_growth로 페이지 생성->다시 검색
 		// 생성한 페이지를 SPT에서 다시 검색
 		page = spt_find_page(spt, page_addr); 
 		// 페이지 생성 실패 시 false 반환
 		if (page == NULL)
 			return false;
 	}
-	/* 5. 쓰기 권한 확인 - page 구조체에 권한을 저장하면 아래 실행 가능 */
+	/* 5. 쓰기 권한 확인 */
 	if (write && !page->writable)
 		return false;
-	/* 5. 프레임 확보 및 매핑 */
+	/* 6. 프레임 확보 및 매핑 */
 	return vm_do_claim_page (page);
 }
+
 
 /* 페이지를 해제한다.
  * 이 함수는 수정하지 말 것. */
