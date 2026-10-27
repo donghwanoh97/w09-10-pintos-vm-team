@@ -64,9 +64,11 @@ err:
 /* Find VA from spt and return page. On error, return NULL. */
 struct page *
 spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
-	struct page *page = NULL;
-  struct page temp;
-	temp.va = va;
+  ASSERT(spt && va);
+	if (va >= KERN_BASE) return NULL;
+
+  struct page *page = NULL;
+  struct page temp = {.va = va};
 
   struct hash_elem *found = hash_find(&spt->hash, &temp.elem);
   if (found)
@@ -79,7 +81,8 @@ spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 bool
 spt_insert_page (struct supplemental_page_table *spt UNUSED,
 		struct page *page UNUSED) {
-	int succ = false;
+  ASSERT(spt && page);
+  int succ = false;
 	
 	struct hash_elem *old = hash_insert(&spt->hash, &page->elem);	
 	int succ = (old == NULL);
@@ -89,7 +92,10 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED,
 
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
-	vm_dealloc_page (page);
+  ASSERT(spt && page);
+	ASSERT(spt_find_page(spt, page->va) == page);
+
+  vm_dealloc_page (page);
 	return true;
 }
 
@@ -181,10 +187,13 @@ vm_do_claim_page (struct page *page) {
 
 static uint64_t page_hash_func (const struct hash_elem *e, void *aux);
 static bool page_less_func(const struct hash_elem *a, const struct hash_elem *b, void *aux);
+static void page_destroy(const struct hash_elem *e, void *aux);
 
 /* Initialize new supplemental page table */
 void
 supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+  ASSERT(spt);
+  
   int succ = hash_init(&spt->hash, page_hash_func, page_less_func, NULL);
 
   if (!succ){
@@ -196,7 +205,8 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
 		struct supplemental_page_table *src UNUSED) {
-  
+  ASSERT(dst && src);
+
   struct hash_iterator i;
   hash_first(&i, &src->hash);
   while(hash_next(&i)){
@@ -275,12 +285,9 @@ fail_malloc:
 /* Free the resource hold by the supplemental page table */
 void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
-  struct hash_iterator i;
-  hash_first(&i, &spt->hash);
-  while(hash_next(&i)){
-    const struct page *p = hash_entry(hash_cur(&i), struct page, elem);
-    vm_dealloc_page(p); // destroy 후 free함. 각 페이지 타입 별 처리는 destroy에서 진행.
-  }
+  ASSERT(spt);
+
+  hash_destroy(&spt->hash, page_destroy);
 }
 
 static uint64_t
@@ -297,4 +304,11 @@ page_less_func(const struct hash_elem *a,
   const struct page *pb = hash_entry(b, struct page, elem);
 
   return pa->va < pb->va;
+}
+
+static void 
+page_destroy(const struct hash_elem *e, void *aux){
+  const struct page *p = hash_entry(e, struct page, elem);
+  
+  vm_dealloc_page(p);
 }
