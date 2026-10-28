@@ -471,7 +471,13 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			unsigned size = (unsigned)f->R.rdx;
 
 			check_buffer(buffer, size);
-
+#ifdef VM
+			/* read는 커널이 사용자 버퍼에 대신 씀. CPU는 커널의 쓰기를 막지 않으므로, 
+			읽기 전용 페이지(예: 코드 영역)면 여기서 직접 막음 */
+			struct page *bp = spt_find_page (&thread_current ()->spt, buffer);
+			if (bp != NULL && !bp->writable)
+				sys_exit(-1);
+#endif
 			if (fd == 0) {
 				uint8_t *buf = buffer;
 				for (unsigned i = 0; i < size; i++) {
