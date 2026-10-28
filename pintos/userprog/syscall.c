@@ -16,7 +16,7 @@
 #include "threads/vaddr.h"
 #include "devices/input.h"
 #include "threads/init.h"
-
+#include "include/vm/vm.h"
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
@@ -122,9 +122,12 @@ void sys_exit (int status) {
  *       문자열은 copy_name()을 씀
  */
 void check_address(const void *addr) {
-	if (addr == NULL || !is_user_vaddr(addr) || pml4_get_page(thread_current()->pml4, addr) == NULL) {
+	if (addr == NULL || !is_user_vaddr(addr) || spt_find_page(&thread_current()->spt, addr) == NULL) {
 		sys_exit(-1);
-	}
+		/* lazy 로딩이라 아직 매핑 안된 정상 페이지가 있음 -> 유효성은 SPT로 판단 */
+		if (spt_find_page(&thread_current()->spt, (void *) addr) == NULL)
+			sys_exit(-1);
+}
 }
 
 /**
