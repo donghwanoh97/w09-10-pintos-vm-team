@@ -66,7 +66,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		if (spt_insert_page(spt, page))
       return true;
     
-    free(page);
+    vm_dealloc_page(page);
 	}
 err:
 	return false;
@@ -269,7 +269,12 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
     struct hash_elem *e = hash_cur (&i);
     struct page *page = hash_entry(e, struct page, hash_elem);
 
-    if (VM_TYPE(page->operations->type) == VM_UNINIT){
+    enum vm_type type = VM_TYPE(page->operations->type);
+
+    switch (type)
+    {
+    case VM_UNINIT:
+    {
       struct aux * new_aux = malloc(sizeof (struct aux));
       if (!new_aux) PANIC("kernel malloc failed.");
 
@@ -283,15 +288,26 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
       new_aux->size = aux->size;
 
       if (!vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux)) return false;
+      if (!vm_claim_page(page->va)) return false;
     }
-    else{
-      enum vm_type type = page->operations->type;
-      // TODO : 부모가 swap_out된 상태라면 추가 처리
-      // TODO : 부모의 page 필드 중 추가로 복제 필요한 부분 처리하기.
+      break;
+    case VM_ANON:
+    {
       if (!vm_alloc_page(type, page->va, page->writable)) return false; 
+      if (!vm_claim_page(page->va)) return false;
+      struct page *new_page = spt_find_page(&thread_current()->spt, page->va);
+      memcpy(new_page->frame->kva, page->frame->kva, PGSIZE);
     }
-
-    if (!vm_claim_page(page->va)) return false;
+      break;
+    case VM_FILE:
+    {
+      if (!vm_alloc_page(type, page->va, page->writable)) return false;
+      if (!vm_claim_page(page->va)) return false;
+    }
+      break;
+    default:
+      return false;
+    }
   }
   return true;
 }
