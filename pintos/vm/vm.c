@@ -6,6 +6,7 @@
 #include "lib/kernel/hash.h"
 #include "include/threads/vaddr.h"
 #include "include/threads/thread.h"
+#include "threads/mmu.h"
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
 void
@@ -229,6 +230,8 @@ vm_do_claim_page (struct page *page) {
 		free(frame);
 		return false;
 	}
+	frame->page = page;
+	page->frame = frame;
 	if (!swap_in (page, frame->kva)) {
 		pml4_clear_page(pml4, page->va);
 		page->frame = NULL;
@@ -236,6 +239,8 @@ vm_do_claim_page (struct page *page) {
 		palloc_free_page((frame->kva));
 		free(frame);
 		return false;
+	}
+	return true;
 }
 /* Returns a hash value for page p. */
 unsigned
