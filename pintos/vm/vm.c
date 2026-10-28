@@ -163,40 +163,41 @@ vm_handle_wp (struct page *page UNUSED) {
 }
 
 /* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
-/* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
 bool
 vm_try_handle_fault (struct intr_frame *f, void *addr,
 		bool user, bool write, bool not_present) {
-	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
+	struct supplemental_page_table *spt = &thread_current ()->spt;
 	struct page *page = NULL;
+	uintptr_t a = (uintptr_t) addr;
+	uintptr_t rsp = user ? f->rsp : thread_current()->user_rsp;
 	ASSERT(spt);
-	/* 1. 사용자 주소 범위 확인 - 이 부분은 수정해야 할 수도 있음 */
+	/* 1. 사용자 주소 범위 확인 */
 	if (!is_user_vaddr(addr))
 		return false;
-	/* 2. 페이지 부재 폴트인지 확인 */
+	/* 2. 이미 있는 페이지의 권한위반인지 확인 */
 	if (!not_present)
 		return false;
 	/* 3. 페이지 시작 주소를 계산해서 spt에서 검색 */
 	void *page_addr = pg_round_down(addr); 
 	page = spt_find_page(spt, page_addr);
-	/* 4. 페이지가 없으면*/
+	/* 4. 페이지가 없으면 */
 	if (page == NULL) {
-		// 스택 확장 조건 검사 
-			// 조건을 만족하지 않으면 return false;
-			// 만족하면 vm_stack_growth로 페이지 생성->다시 검색
-		// 생성한 페이지를 SPT에서 다시 검색
+		/* 스택 확장 조건에 맞으면 스택 확장 시도 스택 크기는 문서 상 1MB이며 
+		x86-64의 PUSH 명령어는 스택 포인터를 변경하기 전에 접근 권한 확인하므로 
+		스택 포인터보다 8바이트 아래에서 페이지 폴트가 발생할 수 잇음 */		
+			if (USER_STACK - STACK_MAX <= a && a < USER_STACK && a >= rsp- 8) 
+				vm_stack_growth(addr);
 		page = spt_find_page(spt, page_addr); 
-		// 페이지 생성 실패 시 false 반환
+		/* 페이지 생성 실패 시 false 반환 */
 		if (page == NULL)
 			return false;
 	}
-	/* 5. 쓰기 권한 확인 */
+	/* 5. 쓰기 권한 확인 (예: 읽기 전용 페이지에 쓰기)*/
 	if (write && !page->writable)
 		return false;
 	/* 6. 페이지가 있으면 프레임 확보 및 매핑 */
 	return vm_do_claim_page (page);
 }
-
 
 /* 페이지를 해제한다.
  * 이 함수는 수정하지 말 것. */
@@ -277,8 +278,7 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 static void
 page_destroy (struct hash_elem *e, void *aux UNUSED) {
     struct page *page = hash_entry(e, struct page, hash_elem);
-    destroy (page);
-    free (page);
+    vm_dealloc_page(page);
 }
 
 
