@@ -358,14 +358,26 @@ __do_fork (void *aux) {
 	 * TODO:       성공적으로 복제하기 전까지는 부모가 fork()에서 반환하면
 	 * TODO:       안 된다는 점에 주의할 것. */
 	fd_table_create();
+  if (current->fd_table == NULL)
+    goto error;
+  
+  lock_acquire(&filesys_lock);
 	for (int i = 2; i < FD_MAX; i++) {
 		if(!parent->fd_table[i]) continue;
 
 		struct file *f = file_duplicate(parent->fd_table[i]);
-		if(f == NULL) { goto error; }
+		if(f == NULL) {
+      lock_release(&filesys_lock);
+      goto error;
+    }
 		current->fd_table[i] = f;
 	}
 	
+  current->using_file = file_duplicate(parent->using_file);
+  lock_release(&filesys_lock);
+
+  if (!current->using_file)
+    goto error;
 
 	process_init ();
 
