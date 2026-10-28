@@ -1,6 +1,7 @@
 /* vm.c: Generic interface for virtual memory objects. */
 
 #include "threads/malloc.h"
+#include "threads/mmu.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
 
@@ -63,9 +64,16 @@ err:
 /* Find VA from spt and return page. On error, return NULL. */
 struct page *
 spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
-	struct page *page = NULL;
-	/* TODO: Fill this function. */
+  ASSERT(spt && va);
+  ASSERT(spt->initialized);
 
+  struct page *page = NULL;
+  struct page temp = {.va = va};
+
+  struct hash_elem *found = hash_find(&spt->hash, &temp.elem);
+  if (found)
+    page = hash_entry(found, struct page, elem);
+	
 	return page;
 }
 
@@ -73,15 +81,24 @@ spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
 bool
 spt_insert_page (struct supplemental_page_table *spt UNUSED,
 		struct page *page UNUSED) {
-	int succ = false;
-	/* TODO: Fill this function. */
+  ASSERT(spt && page);
+  ASSERT(spt->initialized);
+  int succ = false;
+	
+	struct hash_elem *old = hash_insert(&spt->hash, &page->elem);	
+	succ = (old == NULL);
 
 	return succ;
 }
 
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
-	vm_dealloc_page (page);
+  ASSERT(spt && page);
+  ASSERT(spt->initialized);
+	ASSERT(spt_find_page(spt, page->va) == page);
+
+  hash_delete(&spt->hash, &page->elem);
+  vm_dealloc_page (page);
 	return true;
 }
 
@@ -110,8 +127,25 @@ vm_evict_frame (void) {
  * space.*/
 static struct frame *
 vm_get_frame (void) {
-	struct frame *frame = NULL;
-	/* TODO: Fill this function. */
+	struct frame *frame = malloc(sizeof(struct frame));
+  if (!frame)
+    sys_exit(-1);
+  
+  void *kva = palloc_get_page(PAL_USER | PAL_ZERO);
+
+  if (!kva) 
+    PANIC("todo"); // search a free fame from the frame table
+
+  if (!kva)
+    PANIC("todo"); // apply eviction policy 
+
+  if (!kva)        // eviction failed due to the lack of swap slot
+    sys_exit(-1);
+      
+  frame->kva = kva;
+  frame->page = NULL;
+
+  // update frame table if needed;
 
 	ASSERT (frame != NULL);
 	ASSERT (frame->page == NULL);
@@ -134,8 +168,20 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
 		bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
 	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
 	struct page *page = NULL;
-	/* TODO: Validate the fault */
-	/* TODO: Your code goes here */
+
+  if (!not_present) return false; // COW 구현 시 수정 필요
+  
+  void *va = pg_round_down(addr);
+
+  if (user && (va > USER_STACK || va < 0x00400000))   // 사용자가 접근했으나, 사용자 영역이 아님
+      return false;
+  
+  page = spt_find_page(spt, va);  // 미매핑 구역
+  if (!page)
+      return false;
+
+  if (!page->writable && write)     // 쓰기 권한 없는 영역에 쓰기 시도
+      return false;
 
 	return vm_do_claim_page (page);
 }
@@ -151,8 +197,9 @@ vm_dealloc_page (struct page *page) {
 /* Claim the page that allocate on VA. */
 bool
 vm_claim_page (void *va UNUSED) {
-	struct page *page = NULL;
-	/* TODO: Fill this function */
+	struct page *page = spt_find_page(&thread_current()->spt, va);
+  if (!page) 
+    return false;  
 
 	return vm_do_claim_page (page);
 }
@@ -160,31 +207,148 @@ vm_claim_page (void *va UNUSED) {
 /* Claim the PAGE and set up the mmu. */
 static bool
 vm_do_claim_page (struct page *page) {
+  ASSERT(page);
+
 	struct frame *frame = vm_get_frame ();
 
 	/* Set links */
 	frame->page = page;
 	page->frame = frame;
 
-	/* TODO: Insert page table entry to map page's VA to frame's PA. */
+  bool succ = pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable);
+  if (!succ)
+    sys_exit(-1);
 
 	return swap_in (page, frame->kva);
 }
 
+static uint64_t page_hash_func (const struct hash_elem *e, void *aux);
+static bool page_less_func(const struct hash_elem *a, const struct hash_elem *b, void *aux);
+static void page_destroy(struct hash_elem *e, void *aux);
+
 /* Initialize new supplemental page table */
 void
 supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+  ASSERT(spt);
+
+  int succ = hash_init(&spt->hash, page_hash_func, page_less_func, NULL);
+  spt->initialized = succ;
+
+  if (!succ){
+    sys_exit(-1);
+  }
 }
 
 /* Copy supplemental page table from src to dst */
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
 		struct supplemental_page_table *src UNUSED) {
+  ASSERT(dst && src);
+
+  struct hash_iterator i;
+  hash_first(&i, &src->hash);
+  while(hash_next(&i)){
+    const struct page *p_src = hash_entry(hash_cur(&i), struct page, elem);
+
+    struct page *p_dst = malloc(sizeof(struct page));
+    if (p_dst == NULL){
+      goto fail_malloc;
+    }
+
+    struct frame *frame = NULL;
+    enum vm_type type = p_src->operations->type;
+    bool rw = false; // TODO : rw 권한 추가하기
+    p_dst->operations = p_src->operations;
+    p_dst->va = p_src->va;
+
+    switch (type)
+    {
+    case VM_UNINIT:
+    {
+      const struct uninit_page *uninit = &p_src->uninit;
+      uninit_new(p_dst, p_src->va, uninit->init, uninit->type, uninit->aux, uninit->page_initializer);
+    }
+      break;
+    case VM_ANON:
+    {
+      frame = vm_get_frame ();
+      p_dst->frame = frame;
+      frame->page = p_dst;
+
+      if (!anon_initializer(p_dst, type, frame->kva)){
+        goto fail_page; 
+      }
+      // TODO: 프레임 복제
+      
+      if (!pml4_set_page(thread_current()->pml4, p_dst->va, frame->kva, rw)){
+        goto fail_pt;
+      }
+    }
+      break;
+    case VM_FILE:
+    {
+      frame = vm_get_frame ();
+      p_dst->frame = frame;
+      frame->page = p_dst;
+
+      if (!file_backed_initializer(p_dst, type, frame->kva)){
+        goto fail_page;
+      }
+      // TODO : 프레임 복제
+
+      if (!pml4_set_page(thread_current()->pml4, p_dst->va, frame->kva, rw)) {
+        goto fail_pt;
+      }
+    }
+      break;
+    default:
+      goto fail_page;
+    }
+
+    if (spt_insert_page(dst, p_dst)){
+      continue;
+    }
+
+fail_pt:
+    destroy(p_dst);
+fail_page:
+    free(p_dst);
+    // TODO : 프레임 NULL이 아니라면 해제
+fail_malloc:
+    return false;
+  }
+  return true;
 }
 
 /* Free the resource hold by the supplemental page table */
 void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
-	/* TODO: Destroy all the supplemental_page_table hold by thread and
-	 * TODO: writeback all the modified contents to the storage. */
+  ASSERT(spt);
+  ASSERT(spt->initialized);
+
+  spt->initialized = false;
+  hash_destroy(&spt->hash, page_destroy);
+}
+
+static uint64_t
+page_hash_func (const struct hash_elem *e, void *aux){
+  const struct page *p = hash_entry(e, struct page, elem);
+  return hash_bytes(&p->va, sizeof p->va);
+}
+
+static bool 
+page_less_func(const struct hash_elem *a,
+		const struct hash_elem *b,
+		void *aux){
+  const struct page *pa = hash_entry(a, struct page, elem);
+  const struct page *pb = hash_entry(b, struct page, elem);
+
+  return pa->va < pb->va;
+}
+
+static void 
+page_destroy(struct hash_elem *e, void *aux){
+  struct page *p = hash_entry(e, struct page, elem);
+  
+  vm_dealloc_page(p);
 }
