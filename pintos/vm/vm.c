@@ -5,6 +5,8 @@
 #include "vm/inspect.h"
 #include "lib/kernel/hash.h"
 #include "threads/vaddr.h"
+#include "include/userprog/syscall.h"
+#include "threads/mmu.h"
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -129,9 +131,25 @@ static struct frame *
 vm_get_frame (void) {
 	struct frame *frame = NULL;
 	/* TODO: Fill this function. */
-
 	ASSERT (frame != NULL);
 	ASSERT (frame->page == NULL);
+
+	frame = malloc(sizeof frame);
+	if(!frame) {
+		sys_exit(-1);
+	}
+
+	uint64_t kva = palloc_get_page(PAL_USER | PAL_ZERO);
+	if (!kva) { 
+		// swap out
+		PANIC("todo");
+
+		// if swap full, sys_exit(-1)
+	}
+
+	frame->kva = kva;
+	frame->page = NULL;
+
 	return frame;
 }
 
@@ -166,10 +184,21 @@ vm_dealloc_page (struct page *page) {
 }
 
 /* Claim the page that allocate on VA. */
+// todo - setup_stack 또는 vm_stack_growth에서 전파된 에러 처리
 bool
-vm_claim_page (void *va UNUSED) {
+vm_claim_page (void *va) {
 	struct page *page = NULL;
-	/* TODO: Fill this function */
+
+	// create page and insert it into spt
+	if (!vm_alloc_page(VM_UNINIT, pg_round_down(va), true)) {
+		return false;
+	}; 
+
+	page = spt_find_page(thread_current()->spt, va);
+
+	if (!page) {
+		return false; 
+	}
 
 	return vm_do_claim_page (page);
 }
@@ -184,7 +213,10 @@ vm_do_claim_page (struct page *page) {
 	page->frame = frame;
 
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
-
+	if (!pml4_set_page(thread_current()->pml4, frame->page->va, frame->kva, frame->page->writable)) {
+		return false;
+	}
+	
 	return swap_in (page, frame->kva);
 }
 
