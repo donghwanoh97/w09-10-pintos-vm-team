@@ -51,9 +51,12 @@ uninit_initialize (struct page *page, void *kva) {
 	vm_initializer *init = uninit->init;
 	void *aux = uninit->aux;
 
-	/* TODO: You may need to fix this function. */
-	return uninit->page_initializer (page, uninit->type, kva) &&
+  bool succ = uninit->page_initializer (page, uninit->type, kva) &&
 		(init ? init (page, aux) : true);
+	
+  if (succ) free(aux);
+
+  return succ;
 }
 
 /* Free the resources hold by uninit_page. Although most of pages are transmuted
@@ -63,6 +66,6 @@ uninit_initialize (struct page *page, void *kva) {
 static void
 uninit_destroy (struct page *page) {
 	struct uninit_page *uninit UNUSED = &page->uninit;
-	/* TODO: Fill this function.
-	 * TODO: If you don't have anything to do, just return. */
+
+  free(uninit->aux);
 }

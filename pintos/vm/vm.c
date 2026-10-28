@@ -1,4 +1,5 @@
 /* vm.c: 가상 메모리 객체를 위한 공통 인터페이스. */
+#include <string.h>
 
 #include "threads/malloc.h"
 #include "vm/vm.h"
@@ -52,15 +53,19 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 
 	/* upage가 이미 사용 중인지 확인한다. */
 	if (spt_find_page (spt, upage) == NULL) {
-		/* TODO: 페이지를 만들고, VM 타입에 맞는 initializer를 가져온 다음 */
-		 
-		 /* TODO: uninit_new를 불러 "uninit" 페이지 구조체를 만든다.*/
-		 
-		 /* TODO: uninit_new를 부른 뒤에 필드를 수정해야 한다. */
-		 // page->writable = writable;//
+    struct page *page = malloc(sizeof(struct page));
+    if (!page)
+      PANIC("kernal malloc failed");
 
-		/* TODO: 페이지를 spt에 넣는다. */
-		
+    page_initializer initializer = VM_TYPE(type) == VM_ANON ? anon_initializer : file_backed_initializer;
+    uninit_new(page, upage, init, type, aux, initializer);
+		 
+		page->writable = writable;
+
+		if (spt_insert_page(spt, page))
+      return true;
+    
+    free(page);
 	}
 err:
 	return false;
@@ -140,6 +145,16 @@ vm_get_frame (void) {
 	return frame;
 }
 
+void 
+vm_remove_frame(struct frame *frame){
+  ASSERT(frame);
+  
+  // TODO : frame table에서 해당 frame 제거
+  pml4_clear_page(thread_current()->pml4, frame->page->va);
+  palloc_free_page(frame->kva);
+  free(frame);
+}
+
 /* 스택을 키운다. */
 static void
 vm_stack_growth (void *addr UNUSED) {
@@ -150,7 +165,6 @@ static bool
 vm_handle_wp (struct page *page UNUSED) {
 }
 
-/* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
 /* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
 bool
 vm_try_handle_fault (struct intr_frame *f, void *addr,
@@ -213,8 +227,7 @@ vm_do_claim_page (struct page *page) {
 	uint64_t *pml4 = thread_current()->pml4;
 	/* va -> frame 매핑 (PTE)를 추가함 */
 	if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
-		palloc_free_page(frame->kva);
-		free(frame);
+		vm_remove_frame(frame);
 		return false;
 	}
 	frame->page = page;
@@ -248,33 +261,40 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst,
                               struct supplemental_page_table *src) {
-    struct hash_iterator i;
-    hash_first (&i, &src->hash);
+  struct hash_iterator i;
+  hash_first (&i, &src->hash);
 
-    while (hash_next (&i)) {
-        struct hash_elem *e = hash_cur (&i);
-        struct page *page = hash_entry(e, struct page, hash_elem);
-	    /* 1. 원본 페이지의 타입과 초기화 정보 확인 */
-	    /* 2. 타입에 맞게 자식 페이지 생성 및 SPT 등록 */
-	    /* 3. 페이지 종류에 따라 초기화 정보 또는 메모리 내용 복사 - 조금 더 고민 /
-	    /* 4. 페이지 생성이나 복사에 실패하면 false 반환 */
+  while (hash_next (&i)) {
+    struct hash_elem *e = hash_cur (&i);
+    struct page *page = hash_entry(e, struct page, hash_elem);
+
+    if (VM_TYPE(page->operations->type) == VM_UNINIT){
+      struct uninit_page *uninit = &page->uninit;
+      // TODO : aux를 어떻게 복제할지..
+      if (!vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, uninit->aux)) return false;
     }
-    return true;
+    else{
+      enum vm_type type = page->operations->type;
+      // TODO : 부모가 swap_out된 상태라면 추가 처리
+      // TODO : 부모의 page 필드 중 추가로 복제 필요한 부분 처리하기.
+      if (!vm_alloc_page(type, page->va, page->writable)) return false;
+    }
+
+    if (!vm_claim_page(page->va)) return false;
+  }
+  return true;
 }
 
 /* 해시 요소에 해당하는 페이지를 정리한다. */
 static void
 page_destroy (struct hash_elem *e, void *aux UNUSED) {
     struct page *page = hash_entry(e, struct page, hash_elem);
-    destroy (page);
-    free (page);
+    vm_dealloc_page(page);
 }
 
 
 /* 보조 페이지 테이블이 가진 자원을 해제한다 */
 void
 supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
-	/* TODO: 스레드가 가진 보조 페이지 테이블의 내용을 모두 없애고,
-	 * TODO: 수정된 내용은 모두 저장소에 다시 써 준다(write-back). */
 	hash_destroy(&spt->hash, page_destroy);
 }

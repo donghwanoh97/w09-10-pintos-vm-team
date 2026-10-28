@@ -17,7 +17,7 @@ enum vm_type {
 
 	/* 정보를 저장하기 위한 보조 비트 플래그 마커. int 범위에 들어가는 한
 	 * 마커를 더 추가해도 된다. */
-	VM_MARKER_0 = (1 << 3),
+	VM_MARKER_0 = (1 << 3),   // IS_STACK 확인용
 	VM_MARKER_1 = (1 << 4),
 
 	/* 이 값을 넘기지 말 것. */
@@ -110,8 +110,11 @@ bool vm_try_handle_fault (struct intr_frame *f, void *addr, bool user,
 	vm_alloc_page_with_initializer ((type), (upage), (writable), NULL, NULL)
 bool vm_alloc_page_with_initializer (enum vm_type type, void *upage,
 		bool writable, vm_initializer *init, void *aux);
+void vm_remove_frame(struct frame *frame);
 void vm_dealloc_page (struct page *page);
 bool vm_claim_page (void *va);
 enum vm_type page_get_type (struct page *page);
+
+typedef bool (*page_initializer) (struct page *, enum vm_type, void *);
 
 #endif  /* VM_VM_H */

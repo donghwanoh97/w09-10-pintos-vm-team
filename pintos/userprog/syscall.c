@@ -122,7 +122,7 @@ void sys_exit (int status) {
  *       문자열은 copy_name()을 씀
  */
 void check_address(const void *addr) {
-	if (addr == NULL || !is_user_vaddr(addr) || pml4_get_page(thread_current()->pml4, addr) == NULL) {
+	if (addr == NULL || !is_user_vaddr(addr) || spt_find_page(&thread_current()->spt, addr) == NULL) {
 		sys_exit(-1);
 	}
 }

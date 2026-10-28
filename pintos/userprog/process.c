@@ -984,9 +984,16 @@ install_page (void *upage, void *kpage, bool writable) {
 
 static bool
 lazy_load_segment (struct page *page, void *aux) {
-	/* TODO: 파일에서 세그먼트를 로드할 것 */
-	/* TODO: 주소 VA에서 첫 페이지 폴트(page fault)가 발생하면 이 함수가 호출됨. */
-	/* TODO: 이 함수를 호출할 때 VA를 사용할 수 있음. */
+	struct lazy_load_args *args = (struct lazy_load_args *) aux;
+  void *kva = page->frame->kva;
+
+  file_seek(args->file, args->ofs);
+  if (file_read (args->file, kva, args->read_bytes) != (int)args->read_bytes)
+    return false;
+
+  memset (kva + args->read_bytes, 0, args->zero_bytes);
+
+  return true;
 }
 
 /* FILE의 오프셋 OFS에서 시작하는 세그먼트를 주소 UPAGE에 로드함.
@@ -1018,11 +1025,25 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
 		/* TODO: lazy_load_segment에 정보를 넘기기 위해 aux를 설정할 것. */
 		void *aux = NULL;
+    struct lazy_load_args *args = malloc(sizeof (struct lazy_load_args));
+    if (!args)
+      PANIC("kernal malloc failed.");
+    
+    args->file = file;
+    args->ofs = ofs;
+    args->read_bytes = page_read_bytes;
+    args->zero_bytes = page_zero_bytes;
+
+    aux = args;
+
 		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-					writable, lazy_load_segment, aux))
-			return false;
+					writable, lazy_load_segment, aux)){
+      free(args);
+      return false;
+    }
 
 		/* 다음으로 넘어감. */
+    ofs += page_read_bytes;
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
@@ -1033,14 +1054,16 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* USER_STACK 위치에 스택 페이지(PAGE) 하나를 생성함. 성공하면 true를 반환함. */
 static bool
 setup_stack (struct intr_frame *if_) {
-	bool success = false;
 	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
 
-	/* TODO: stack_bottom에 스택을 매핑하고 즉시 해당 페이지를 claim할 것.
-	 * TODO: 성공하면 rsp를 그에 맞게 설정할 것.
-	 * TODO: 해당 페이지가 스택임을 표시해야 함. */
-	/* TODO: 여기에 코드를 작성할 것 */
+  if (!vm_alloc_page(VM_ANON | VM_MARKER_0, stack_bottom, true))
+    return false;
 
-	return success;
+  if (!vm_claim_page(stack_bottom))
+    return false;
+  
+  if_->rsp = USER_STACK;
+
+	return true;
 }
 #endif /* VM */
