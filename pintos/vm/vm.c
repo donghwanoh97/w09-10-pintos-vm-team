@@ -97,6 +97,7 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
   ASSERT(spt->initialized);
 	ASSERT(spt_find_page(spt, page->va) == page);
 
+  hash_delete(spt, page);
   vm_dealloc_page (page);
 	return true;
 }
