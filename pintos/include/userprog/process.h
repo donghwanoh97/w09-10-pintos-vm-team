@@ -73,11 +73,18 @@ struct initd_args {
     struct child_info *info;      /* initd가 self_info로 가져갈 기록 */
 };
 
+/* All members of this struct can be shallow-copied.
+  Thus, the copy shares the same file object. */
 struct lazy_load_args {
   struct file *file;
   off_t ofs;
   uint32_t read_bytes;
   uint32_t zero_bytes;
+};
+
+struct aux {
+  void *aux_pt;
+  uint64_t size;
 };
 
 #endif /* userprog/process.h */

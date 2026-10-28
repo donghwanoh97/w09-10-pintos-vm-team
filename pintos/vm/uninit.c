@@ -8,11 +8,14 @@
  * function.
  * */
 
+#include "userprog/process.h"
 #include "vm/vm.h"
 #include "vm/uninit.h"
 
 static bool uninit_initialize (struct page *page, void *kva);
 static void uninit_destroy (struct page *page);
+static void uninit_free_resources(void *aux);
+
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations uninit_ops = {
@@ -54,7 +57,7 @@ uninit_initialize (struct page *page, void *kva) {
   bool succ = uninit->page_initializer (page, uninit->type, kva) &&
 		(init ? init (page, aux) : true);
 	
-  if (succ) free(aux);
+  if (succ) uninit_free_resources(aux);
 
   return succ;
 }
@@ -67,5 +70,13 @@ static void
 uninit_destroy (struct page *page) {
 	struct uninit_page *uninit UNUSED = &page->uninit;
 
-  free(uninit->aux);
+  uninit_free_resources(uninit->aux);
+}
+
+static void
+uninit_free_resources(void *aux){
+  if (!aux) return;
+  
+  free(((struct aux *)aux)->aux_pt);
+  free(aux);
 }

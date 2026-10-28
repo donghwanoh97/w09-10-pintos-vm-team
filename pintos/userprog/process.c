@@ -984,7 +984,7 @@ install_page (void *upage, void *kpage, bool writable) {
 
 static bool
 lazy_load_segment (struct page *page, void *aux) {
-	struct lazy_load_args *args = (struct lazy_load_args *) aux;
+	struct lazy_load_args *args = (struct lazy_load_args *)((struct aux *) aux)->aux_pt;
   void *kva = page->frame->kva;
 
   file_seek(args->file, args->ofs);
@@ -1024,7 +1024,10 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
 		/* TODO: lazy_load_segment에 정보를 넘기기 위해 aux를 설정할 것. */
-		void *aux = NULL;
+    struct aux *aux = malloc(sizeof(struct aux));
+    if (!aux)
+      PANIC("kernal malloc failed.");
+
     struct lazy_load_args *args = malloc(sizeof (struct lazy_load_args));
     if (!args)
       PANIC("kernal malloc failed.");
@@ -1034,10 +1037,11 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
     args->read_bytes = page_read_bytes;
     args->zero_bytes = page_zero_bytes;
 
-    aux = args;
+    aux->aux_pt = args;
+    aux->size = sizeof(struct lazy_load_args);
 
 		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-					writable, lazy_load_segment, aux)){
+					writable, lazy_load_segment, (void *)aux)){
       free(args);
       return false;
     }

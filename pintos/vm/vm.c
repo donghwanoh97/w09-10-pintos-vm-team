@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "threads/malloc.h"
+#include "userprog/process.h"
 #include "vm/vm.h"
 #include "vm/inspect.h"
 #include "lib/kernel/hash.h"
@@ -269,15 +270,25 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
     struct page *page = hash_entry(e, struct page, hash_elem);
 
     if (VM_TYPE(page->operations->type) == VM_UNINIT){
+      struct aux * new_aux = malloc(sizeof (struct aux));
+      if (!new_aux) PANIC("kernel malloc failed.");
+
       struct uninit_page *uninit = &page->uninit;
-      // TODO : aux를 어떻게 복제할지..
-      if (!vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, uninit->aux)) return false;
+      struct aux * aux = uninit->aux;      
+      void *new_aux_pt = malloc(aux->size);
+      if (!new_aux_pt) PANIC("kernel malloc failed.");
+
+      memcpy(new_aux_pt, aux->aux_pt, aux->size);
+      new_aux->aux_pt = new_aux_pt;
+      new_aux->size = aux->size;
+
+      if (!vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux)) return false;
     }
     else{
       enum vm_type type = page->operations->type;
       // TODO : 부모가 swap_out된 상태라면 추가 처리
       // TODO : 부모의 page 필드 중 추가로 복제 필요한 부분 처리하기.
-      if (!vm_alloc_page(type, page->va, page->writable)) return false;
+      if (!vm_alloc_page(type, page->va, page->writable)) return false; 
     }
 
     if (!vm_claim_page(page->va)) return false;
