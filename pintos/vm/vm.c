@@ -4,6 +4,7 @@
 #include "vm/vm.h"
 #include "vm/inspect.h"
 #include "lib/kernel/hash.h"
+#include "threads/vaddr.h"
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -65,11 +66,9 @@ err:
 struct page *
 spt_find_page (struct supplemental_page_table *spt, void *va) {
 	struct page *page = NULL;
-	ASSERT(spt != NULL && va != NULL);
+	ASSERT(spt != NULL);
 
-	//struct hash_elem elem;
-	// struct page temp_page = {.va = va, .hash_elem = elem};
-	struct page temp_page = {.va = va };
+	struct page temp_page = {.va = pg_round_down(va) };
 	
 	struct hash_elem *found = hash_find(&spt->hash, &temp_page.hash_elem);
 
@@ -212,7 +211,9 @@ void
 supplemental_page_table_init (struct supplemental_page_table *spt) {
 	ASSERT(spt != NULL);
 	
-	hash_init(&spt->hash, page_hash, page_less, NULL);
+	if (!hash_init(&spt->hash, page_hash, page_less, NULL)) {
+		sys_exit(-1);
+	}
 }
 
 /* Copy supplemental page table from src to dst */
@@ -221,7 +222,7 @@ supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
 		struct supplemental_page_table *src UNUSED) {
 }
 
-static void supplemental_page_table_kill_helper(struct hash_elem *elem, void* aux UNUSED) {
+static void page_destroy(struct hash_elem *elem, void* aux UNUSED) {
 	struct page *p = hash_entry(elem, struct page, hash_elem); 
 	vm_dealloc_page(p);
 }
@@ -233,5 +234,6 @@ supplemental_page_table_kill (struct supplemental_page_table *spt) {
 	 * TODO: writeback all the modified contents to the storage. */
 	ASSERT(spt != NULL);
 
-	hash_clear(&spt->hash, supplemental_page_table_kill_helper);
+	// hash_destroy 호출 시점 고민
+	hash_clear(&spt->hash, page_destroy);
 }
