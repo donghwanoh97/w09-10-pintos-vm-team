@@ -64,6 +64,7 @@ uninit_initialize (struct page *page, void *kva) {
 static void
 uninit_destroy (struct page *page) {
 	struct uninit_page *uninit UNUSED = &page->uninit;
-	/* TODO: 이 함수를 채울 것.
-	 * TODO: 할 일이 없으면 그냥 return 하면 된다. */
+	/* 한번도 claim 안된 페이지: 
+	Lazy 로딩용 aux가 그대로 남아있으므로 해제(스택은 NULL이라 free해도 안전*/
+	free(uninit->aux);	
 }
