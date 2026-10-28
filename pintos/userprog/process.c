@@ -588,6 +588,11 @@ static void
 process_cleanup (void) {
 	struct thread *curr = thread_current ();
 
+  lock_acquire(&filesys_lock);
+  file_close(curr->using_file);
+  lock_release(&filesys_lock); 
+  curr->using_file = NULL;
+
 #ifdef VM
 	supplemental_page_table_kill (&curr->spt);
 #endif
