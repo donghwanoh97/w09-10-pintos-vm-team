@@ -987,6 +987,18 @@ lazy_load_segment (struct page *page, void *aux) {
 	/* TODO: 파일에서 세그먼트를 로드할 것 */
 	/* TODO: 주소 VA에서 첫 페이지 폴트(page fault)가 발생하면 이 함수가 호출됨. */
 	/* TODO: 이 함수를 호출할 때 VA를 사용할 수 있음. */
+	struct lazy_load_args* args = aux;
+	uint8_t *kpage = page->frame->kva;
+	
+	file_seek(args->file, args->ofs);
+
+	if (file_read(args->file, kpage, args->page_read_bytes) != (int) args->page_read_bytes) {
+		free(args);
+		return false;
+	}
+
+	memset(kpage + args->page_read_bytes, 0, args->page_zero_bytes);
+	return true;
 }
 
 /* FILE의 오프셋 OFS에서 시작하는 세그먼트를 주소 UPAGE에 로드함.
@@ -1017,7 +1029,18 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
 		/* TODO: lazy_load_segment에 정보를 넘기기 위해 aux를 설정할 것. */
-		void *aux = NULL;
+		struct lazy_load_args *args = malloc(sizeof *args);
+		if (!args) {
+			PANIC("malloc");
+		}
+
+		args->file = file;
+		args->ofs = ofs;
+		args->upage = upage;
+		args->page_read_bytes = page_read_bytes;
+		args->page_zero_bytes = page_zero_bytes;
+
+		void *aux = args;
 		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
 					writable, lazy_load_segment, aux))
 			return false;
@@ -1026,6 +1049,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
+		ofs += read_bytes;
 	}
 	return true;
 }
@@ -1036,10 +1060,19 @@ setup_stack (struct intr_frame *if_) {
 	bool success = false;
 	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
 
-	/* TODO: stack_bottom에 스택을 매핑하고 즉시 해당 페이지를 claim할 것.
-	 * TODO: 성공하면 rsp를 그에 맞게 설정할 것.
-	 * TODO: 해당 페이지가 스택임을 표시해야 함. */
-	/* TODO: 여기에 코드를 작성할 것 */
+	/* stack_bottom에 스택을 매핑하고 즉시 해당 페이지를 claim
+	 * 성공하면 rsp를 그에 맞게 설정.
+	 * 해당 페이지가 스택임을 표시. */
+
+	 struct page *page = malloc(sizeof *page);
+	 if (!page) {
+		PANIC("malloc");
+	 }
+	 page->va = stack_bottom;
+
+	 if (!vm_alloc_page(VM_ANON | VM_MARKER_0, page->va, true) || !vm_claim_page(page->va)){
+		return false;
+	 }
 
 	return success;
 }
