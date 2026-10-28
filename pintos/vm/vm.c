@@ -219,16 +219,7 @@ vm_do_claim_page (struct page *page) {
 	}
 	frame->page = page;
 	page->frame = frame;
-	/* page type에 맞는 함수로 frame(kva)에 내용을 채움. 실패하면 되돌림 */
-	if (!swap_in (page, frame->kva)) {
-			pml4_clear_page(pml4, page->va);
-			page->frame = NULL;
-			frame->page = NULL;			
-			palloc_free_page(frame->kva); /* frame을 free하기 전에 kva 먼저 */
-			free(frame);
-			return false;
-	}
-	return true;
+	return swap_in (page, frame->kva);
 }
 /* Returns a hash value for page p. */
 unsigned
