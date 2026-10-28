@@ -69,7 +69,6 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		/* 필드에 쓰기 권한 설정 */
 		page->writable = writable;
 		if (!spt_insert_page(spt, page)) {
-			/* 페이지 해제 여기서 해도 될까 */		
 			free(page);
 			goto err;
 		}
@@ -232,16 +231,9 @@ vm_do_claim_page (struct page *page) {
 	}
 	frame->page = page;
 	page->frame = frame;
-	if (!swap_in (page, frame->kva)) {
-		pml4_clear_page(pml4, page->va);
-		page->frame = NULL;
-		frame->page = NULL;
-		palloc_free_page((frame->kva));
-		free(frame);
-		return false;
-	}
-	return true;
+	return swap_in (page, frame->kva);
 }
+
 /* Returns a hash value for page p. */
 unsigned
 page_hash (const struct hash_elem *p_, void *aux UNUSED) {
