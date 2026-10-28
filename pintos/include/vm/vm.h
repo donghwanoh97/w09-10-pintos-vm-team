@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include "threads/palloc.h"
 #include "lib/kernel/hash.h"
+
 enum vm_type {
 	/* 아직 초기화되지 않은 페이지 */
 	VM_UNINIT = 0,
@@ -36,6 +37,8 @@ struct thread;
 
 /* type에서 하위 3비트(페이지 종류)만 뽑아낸다 */
 #define VM_TYPE(type) ((type) & 7)
+#define STACK_MAX (1<<20) //1MB
+#define IS_STACK(type) (((type) & VM_MARKER_0) != 0)
 
 /* "페이지"를 나타내는 구조체.
  * 일종의 "부모 클래스"이고, 자식 클래스가 네 개 있다:
@@ -90,7 +93,6 @@ struct page_operations {
 struct supplemental_page_table {
 	struct hash hash;
 };
-
 #include "threads/thread.h"
 void supplemental_page_table_init (struct supplemental_page_table *spt);
 bool supplemental_page_table_copy (struct supplemental_page_table *dst,
