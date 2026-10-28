@@ -1049,7 +1049,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
-		ofs += read_bytes;
+		ofs += page_read_bytes;
 	}
 	return true;
 }
@@ -1063,16 +1063,10 @@ setup_stack (struct intr_frame *if_) {
 	/* stack_bottom에 스택을 매핑하고 즉시 해당 페이지를 claim
 	 * 성공하면 rsp를 그에 맞게 설정.
 	 * 해당 페이지가 스택임을 표시. */
-
-	 struct page *page = malloc(sizeof *page);
-	 if (!page) {
-		PANIC("malloc");
-	 }
-	 page->va = stack_bottom;
-
-	 if (!vm_alloc_page(VM_ANON | VM_MARKER_0, page->va, true) || !vm_claim_page(page->va)){
-		return false;
-	 }
+	if (vm_alloc_page(VM_ANON | VM_MARKER_0, stack_bottom, true) && vm_claim_page(stack_bottom)){
+		if_->rsp = USER_STACK;
+		success = true;
+	}
 
 	return success;
 }
