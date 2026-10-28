@@ -53,7 +53,7 @@ uninit_initialize (struct page *page, void *kva) {
 
 	bool succ = uninit->page_initializer (page, uninit->type, kva) &&
 	(init ? init (page, aux) : true);
-	free(aux); /* uninit->aux 말고, 위에서 꺼내 둔 aux */
+	free (aux); /* 함수 맨 앞에서 복사해 둔 aux를 씀. uninit->aux는 anon_initializer가 덮어썼을 수 있음 */
 	return succ;
 }
 
