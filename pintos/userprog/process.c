@@ -1042,18 +1042,19 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 }
 
 /* USER_STACK 위치에 스택 페이지(PAGE) 하나를 생성함. 성공하면 true를 반환함. */
+/* USER_STACK 위치에 스택 페이지(PAGE) 하나를 생성함. 성공하면 true를 반환함. */
 static bool
 setup_stack (struct intr_frame *if_) {
 	bool success = false;
 	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
-
-	/* TODO: stack_bottom에 스택을 매핑하고 즉시 해당 페이지를 claim할 것.
-	 * TODO: 성공하면 rsp를 그에 맞게 설정할 것.
-
-	 * TODO: 해당 페이지가 스택임을 표시해야 함.*/
-	
-	/* TODO: 여기에 코드를 작성할 것 */
-
+  /* stack_bottom에 스택 페이지를 예약(SPT 등록)하고, 
+  lazy하지 않게 바로 claim해서 frame을 붙인다 */
+	if (vm_alloc_page(VM_ANON | VM_MARKER_0, stack_bottom, true) && 
+		 vm_claim_page(stack_bottom)) { 
+		/* rsp를 유저스택 맨 위로 설정을 한다. 스택은 rsp 부터 아래로 쌓인다. */
+		if_->rsp = USER_STACK;
+		success = true;
+	}
 	return success;
 }
 #endif /* VM */
