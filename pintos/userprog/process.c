@@ -992,10 +992,10 @@ lazy_load_segment (struct page *page, void *aux) {
     return false;
 	}
 	/* 파일을 채운 나머지는 0으로 채운다. */
-	memset(kva + info->page_read_bytes, 0, info->page_zero_bytes));
+	memset(kva + info->page_read_bytes, 0, info->page_zero_bytes);
 	free (info);
 return true;
-
+}
 /* FILE의 오프셋 OFS에서 시작하는 세그먼트를 주소 UPAGE에 로드함.
  * 총 READ_BYTES + ZERO_BYTES 바이트의 가상 메모리가 다음과 같이
  * 초기화됨.
