@@ -114,12 +114,11 @@ struct thread {
 	struct lock *wait_on_lock;          /* 현재 획득을 기다리고 있는 락의 주소 */
 	struct list donations;              /* 자신에게 우선순위를 기부한 스레드들의 리스트 */
 	struct list_elem donation_elem;     /* 기부자 리스트(donations)에 삽입될 리스트 엘리먼트 */
-	
+	uint64_t *pml4;                     /* 페이지 맵 레벨 4(Page map level 4) */
 #ifdef USERPROG
 	/* userprog/process.c가 소유함. */
 	struct list children;               /* 부모 -> 자식 연결용 리스트 (struct child_info) */
 	struct child_info *self_info;       /* 자식 -> 부모 연결용 포인터. 커널 스레드는 NULL */
-	uint64_t *pml4;                     /* 페이지 맵 레벨 4(Page map level 4) */
 	struct exit_info *exit_info;	/* 내 종료 기록 주소 */
 	struct file **fd_table;		/* fd 테이블 (calloc, FD_MAX칸, 커널 스레드는 NULL) */
 	struct file *using_file ;	/* 실행 중인 실행 파일. deny-write를 건 채 종료 때 닫음 */
