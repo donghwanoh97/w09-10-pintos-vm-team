@@ -45,23 +45,35 @@ static struct frame *vm_evict_frame (void);
 bool
 vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		vm_initializer *init, void *aux) {
-
 	ASSERT (VM_TYPE(type) != VM_UNINIT)
-
 	struct supplemental_page_table *spt = &thread_current ()->spt;
-
-	/* upage가 이미 사용 중인지 확인한다. */
 	if (spt_find_page (spt, upage) == NULL) {
-		/* TODO: 페이지를 만들고, VM 타입에 맞는 initializer를 가져온 다음 */
-		 
-		 /* TODO: uninit_new를 불러 "uninit" 페이지 구조체를 만든다.*/
-		 
-		 /* TODO: uninit_new를 부른 뒤에 필드를 수정해야 한다. */
-		 // page->writable = writable;//
-
-		/* TODO: 페이지를 spt에 넣는다. */
-		
-	}
+		bool (*page_initializer) (struct page *, enum vm_type, void *kva);
+		switch (VM_TYPE(type)) {
+			case VM_ANON:
+				page_initializer = anon_initializer;
+				break;
+			case VM_FILE:
+				page_initializer = file_backed_initializer;
+				break;
+			default:
+				goto err;
+		}
+		struct page *page = malloc(sizeof(struct page));
+		if (page == NULL) 
+			/* 만일 말록 실패 시 커널 패닉으로 함.*/
+			PANIC("malloc fail");
+		/* UNINIT 페이지를 생성. 초기 정보 저장. */
+		uninit_new(page, upage, init, type, aux, page_initializer);
+		/* 필드에 쓰기 권한 설정 */
+		page->writable = writable;
+		if (!spt_insert_page(spt, page)) {
+			/* 페이지 해제 여기서 해도 될까 */		
+			free(page);
+			goto err;
+		}
+		return true;
+}
 err:
 	return false;
 }
@@ -158,8 +170,7 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
 	struct page *page = NULL;
 	ASSERT(spt);
-	/* TODO: 폴트가 유효한지 검사한다 */
-	/* 1. 사용자 주소 범위 확인 */
+	/* 1. 사용자 주소 범위 확인 - 이 부분은 수정해야 할 수도 있음 */
 	if (!is_user_vaddr(addr))
 		return false;
 	/* 2. 페이지 부재 폴트인지 확인 */
@@ -182,7 +193,7 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 	/* 5. 쓰기 권한 확인 */
 	if (write && !page->writable)
 		return false;
-	/* 6. 프레임 확보 및 매핑 */
+	/* 6. 페이지가 있으면 프레임 확보 및 매핑 */
 	return vm_do_claim_page (page);
 }
 
