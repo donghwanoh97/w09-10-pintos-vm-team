@@ -229,9 +229,13 @@ vm_do_claim_page (struct page *page) {
 		free(frame);
 		return false;
 	}
-	frame->page = page;
-	page->frame = frame;
-	return swap_in (page, frame->kva);
+	if (!swap_in (page, frame->kva)) {
+		pml4_clear_page(pml4, page->va);
+		page->frame = NULL;
+		frame->page = NULL;
+		palloc_free_page((frame->kva));
+		free(frame);
+		return false;
 }
 /* Returns a hash value for page p. */
 unsigned
