@@ -414,7 +414,10 @@ process_exec (void *f_name) {
 
 	/* 먼저 현재 컨텍스트를 제거함 */
 	process_cleanup();
-
+	#ifdef VM
+	/* kill에서 hash를 destroy했으므로, load 전에 빈 SPT로 다시 초기화 */
+	supplemental_page_table_init(&thread_current()->spt);
+	#endif
 	/* 그런 다음 바이너리를 로드함 */
 
 	success = load(file_name, &_if);
@@ -793,7 +796,6 @@ load (const char *file_name, struct intr_frame *if_) {
 				break;
 		}
 	}
-
 	/* 스택을 설정함. */
 	if (!setup_stack(if_))
 		goto filesys_done;
