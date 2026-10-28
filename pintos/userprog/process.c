@@ -984,10 +984,17 @@ install_page (void *upage, void *kpage, bool writable) {
 
 static bool
 lazy_load_segment (struct page *page, void *aux) {
-	/* TODO: 파일에서 세그먼트를 로드할 것 */
-	/* TODO: 주소 VA에서 첫 페이지 폴트(page fault)가 발생하면 이 함수가 호출됨. */
-	/* TODO: 이 함수를 호출할 때 VA를 사용할 수 있음. */
-}
+	struct file_page *info = aux;
+	void *kva = page->frame->kva;
+	/* 오프셋부터 사이즈 바이트를 버퍼로 읽음 */
+	if (file_read_at(info->file, kva, info->page_read_bytes, info->ofs) != (int) info->page_read_bytes) {
+    free(info);
+    return false;
+	}
+	/* 파일을 채운 나머지는 0으로 채운다. */
+	memset(kva + info->page_read_bytes, 0, info->page_zero_bytes));
+	free (info);
+return true;
 
 /* FILE의 오프셋 OFS에서 시작하는 세그먼트를 주소 UPAGE에 로드함.
  * 총 READ_BYTES + ZERO_BYTES 바이트의 가상 메모리가 다음과 같이
