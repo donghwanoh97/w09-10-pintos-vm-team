@@ -77,10 +77,11 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 
 		/* 페이지를 spt에 넣는다. */
 		if (!spt_insert_page(spt, page)) {
+			free(page);
 			goto err;
 		}
+		return true;
 	}
-	return true;
 err:
 	return false;
 }

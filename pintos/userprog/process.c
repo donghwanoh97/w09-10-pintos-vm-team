@@ -990,14 +990,14 @@ lazy_load_segment (struct page *page, void *aux) {
 	struct lazy_load_args* args = aux;
 	uint8_t *kpage = page->frame->kva;
 	
-	file_seek(args->file, args->ofs);
-
-	if (file_read(args->file, kpage, args->page_read_bytes) != (int) args->page_read_bytes) {
+	
+	if (file_read_at(args->file, kpage, args->page_read_bytes, args->ofs) != (int) args->page_read_bytes) {
 		free(args);
 		return false;
 	}
 
 	memset(kpage + args->page_read_bytes, 0, args->page_zero_bytes);
+	free(args);
 	return true;
 }
 
@@ -1041,9 +1041,10 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		args->page_zero_bytes = page_zero_bytes;
 
 		void *aux = args;
-		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-					writable, lazy_load_segment, aux))
+		if (!vm_alloc_page_with_initializer (VM_ANON, upage, writable, lazy_load_segment, aux)) {
+			free(args);
 			return false;
+		}
 
 		/* 다음으로 넘어감. */
 		read_bytes -= page_read_bytes;
