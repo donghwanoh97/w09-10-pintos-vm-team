@@ -343,6 +343,14 @@ __do_fork (void *aux) {
 		goto error;
 
 	process_activate (current);
+
+  lock_acquire(&filesys_lock);
+  current->using_file = file_duplicate(parent->using_file);
+  lock_release(&filesys_lock);
+
+  if (!current->using_file)
+    goto error;
+
 #ifdef VM
 	supplemental_page_table_init (&current->spt);
 	if (!supplemental_page_table_copy (&current->spt, &parent->spt))
@@ -373,11 +381,7 @@ __do_fork (void *aux) {
 		current->fd_table[i] = f;
 	}
 	
-  current->using_file = file_duplicate(parent->using_file);
   lock_release(&filesys_lock);
-
-  if (!current->using_file)
-    goto error;
 
 	process_init ();
 
@@ -683,6 +687,7 @@ static bool validate_segment (const struct Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		uint32_t read_bytes, uint32_t zero_bytes,
 		bool writable);
+static void *duplicate_lazy_load_arg(void * aux);
 
 /**
  * @brief 명령줄 FILE_NAME의 ELF 실행 파일을 현재 스레드에 로드하고 인자를 유저 스택에 쌓음
@@ -1055,7 +1060,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
     args->zero_bytes = page_zero_bytes;
 
     aux->aux_pt = args;
-    aux->size = sizeof(struct lazy_load_args);
+    aux->duplicate_func = duplicate_lazy_load_arg;
 
 		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
 					writable, lazy_load_segment, (void *)aux)){
@@ -1069,6 +1074,28 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		upage += PGSIZE;
 	}
 	return true;
+}
+
+static void *
+duplicate_lazy_load_arg(void * aux){
+  struct aux *src = (struct aux *)aux;
+  struct lazy_load_args *old_arg = (struct lazy_load_args *)src->aux_pt;
+  
+  struct aux *dst = malloc(sizeof(struct aux));
+  if (!dst)
+    PANIC("kernel malloc failed.");
+
+  struct lazy_load_args *new_arg = malloc(sizeof(struct lazy_load_args));
+  if (!new_arg)
+    PANIC("kernel malloc failed.");
+  
+  dst->aux_pt = new_arg;
+  new_arg->ofs = old_arg->ofs;
+  new_arg->read_bytes = old_arg->read_bytes;
+  new_arg->zero_bytes = old_arg->zero_bytes;
+  new_arg->file = thread_current()->using_file;
+  
+  return (void *)dst;
 }
 
 /* USER_STACK 위치에 스택 페이지(PAGE) 하나를 생성함. 성공하면 true를 반환함. */

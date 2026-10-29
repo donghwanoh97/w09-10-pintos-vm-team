@@ -303,12 +303,11 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 static bool try_copy_uninit(struct page *page);
 static bool try_copy_anon(struct page *page);
 static bool try_copy_file(struct page *page);
-static void *copy_aux(struct aux *aux);
 
 
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst,
-                              struct supplemental_page_table *src) {
+                             struct supplemental_page_table *src) {
   struct hash_iterator i;
   hash_first (&i, &src->hash);
 
@@ -340,7 +339,7 @@ static bool
 try_copy_uninit(struct page *page){
   struct uninit_page *uninit = &page->uninit;
   struct aux * aux = uninit->aux;      
-  struct aux * new_aux = copy_aux(aux);
+  struct aux * new_aux = aux->duplicate_func(aux);
 
   if (!vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux)){
     return false;
@@ -351,23 +350,6 @@ try_copy_uninit(struct page *page){
   }
 
   return true;
-}
-
-static void *
-copy_aux(struct aux *aux){
-  if (!aux) return NULL;
-
-  struct aux *new_aux = malloc(sizeof (struct aux));
-  if (!new_aux) PANIC("kernel malloc failed.");
-
-  void *new_aux_pt = malloc(aux->size);
-  if (!new_aux_pt) PANIC("kernel malloc failed.");
-
-  memcpy(new_aux_pt, aux->aux_pt, aux->size);
-  new_aux->aux_pt = new_aux_pt;
-  new_aux->size = aux->size;
-
-  return new_aux;
 }
 
 static bool

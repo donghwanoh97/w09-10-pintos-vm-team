@@ -82,9 +82,4 @@ struct lazy_load_args {
   uint32_t zero_bytes;
 };
 
-struct aux {
-  void *aux_pt;
-  uint64_t size;
-};
-
 #endif /* userprog/process.h */
