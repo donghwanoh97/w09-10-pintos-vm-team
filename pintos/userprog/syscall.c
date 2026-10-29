@@ -337,6 +337,12 @@ void fd_table_close_all(void) {
  */
 void
 syscall_handler (struct intr_frame *f UNUSED) {
+#ifdef VM
+	/* 시스템 콜 처리 중 커널이 사용자 스택에 접근하다 page fault가 나면 
+	* 그때의 f->rsp는 커널 rsp라서 스택 확장 판단에 쓸 수 없음. 
+	* 진입 시점의 사용자 rsp를 저장해두고 vm_try_handle_fault에 사용함 */
+	thread_current()->user_rsp = f->rsp;
+#endif
 	int fd = f->R.rdi;
 	switch (f->R.rax)
 	{
