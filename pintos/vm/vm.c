@@ -155,12 +155,16 @@ vm_get_frame (void) {
 /* 스택을 키운다. */
 static void
 vm_stack_growth (void *addr UNUSED) {
+	vm_alloc_page(VM_MARKER_0, pg_round_down(addr) - PGSIZE, true);
 }
 
 /* 쓰기 보호된(write-protected) 페이지에서 난 폴트를 처리한다. */
 static bool
 vm_handle_wp (struct page *page UNUSED) {
 }
+
+/* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
+
 
 /* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
 bool
@@ -184,9 +188,10 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 	if (page == NULL) {
 		/* 스택 확장 조건에 맞으면 스택 확장 시도 스택 크기는 문서 상 1MB이며 
 		x86-64의 PUSH 명령어는 스택 포인터를 변경하기 전에 접근 권한 확인하므로 
-		스택 포인터보다 8바이트 아래에서 페이지 폴트가 발생할 수 잇음 */		
-			if (USER_STACK - STACK_MAX <= a && a < USER_STACK && a >= rsp- 8) 
+		스택 포인터보다 8바이트 아래에서 페이지 폴트가 발생할 수 있음 */		
+			if (USER_STACK - STACK_MAX <= a && a < USER_STACK && a >= rsp - 8) {
 				vm_stack_growth(addr);
+		}
 		page = spt_find_page(spt, page_addr); 
 		/* 페이지 생성 실패 시 false 반환 */
 		if (page == NULL)
