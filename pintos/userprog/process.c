@@ -984,11 +984,18 @@ install_page (void *upage, void *kpage, bool writable) {
 
 static bool
 lazy_load_segment (struct page *page, void *aux) {
-	/* TODO: 파일에서 세그먼트를 로드할 것 */
-	/* TODO: 주소 VA에서 첫 페이지 폴트(page fault)가 발생하면 이 함수가 호출됨. */
-	/* TODO: 이 함수를 호출할 때 VA를 사용할 수 있음. */
-}
+	struct file_page *info = aux;
+	void *kva = page->frame->kva;
+	/* 오프셋부터 사이즈 바이트를 버퍼로 읽음 */
+	if (file_read_at(info->file, kva, info->page_read_bytes, info->ofs) != (int) info->page_read_bytes) {
+    return false;
+	}
+	/* 파일을 채운 나머지는 0으로 채운다. */
+	memset(kva + info->page_read_bytes, 0, info->page_zero_bytes);
+	/* aux 해제는 unint_initialize에서 함 */
+return true;
 
+}
 /* FILE의 오프셋 OFS에서 시작하는 세그먼트를 주소 UPAGE에 로드함.
  * 총 READ_BYTES + ZERO_BYTES 바이트의 가상 메모리가 다음과 같이
  * 초기화됨.
@@ -1008,39 +1015,46 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
 	ASSERT (pg_ofs (upage) == 0);
 	ASSERT (ofs % PGSIZE == 0);
-
 	while (read_bytes > 0 || zero_bytes > 0) {
 		/* 이 페이지를 어떻게 채울지 계산함.
 		 * FILE에서 PAGE_READ_BYTES 바이트를 읽고
 		 * 마지막 PAGE_ZERO_BYTES 바이트는 0으로 채울 것임. */
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
-
-		/* TODO: lazy_load_segment에 정보를 넘기기 위해 aux를 설정할 것. */
-		void *aux = NULL;
-		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-					writable, lazy_load_segment, aux))
-			return false;
-
-		/* 다음으로 넘어감. */
+		/* 메모리 페이지 하나를 가져옴. */
+		struct file_page *aux = malloc(sizeof(struct file_page)) ;  /* 페이지마다 새로 */
+		if (aux == NULL) return false;
+		aux->file = file;
+		aux->ofs = ofs;
+		aux->page_read_bytes = page_read_bytes; 
+		aux->page_zero_bytes = page_zero_bytes;  
+		if (!vm_alloc_page_with_initializer (VM_ANON, upage, writable, lazy_load_segment, aux)) {
+	    /* 여기서 프리를 해도 될까 */
+	    free(aux);
+	    return false;
+	  }
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
-	}
+		ofs += page_read_bytes;
+	}                                   
 	return true;
 }
 
+/* USER_STACK 위치에 스택 페이지(PAGE) 하나를 생성함. 성공하면 true를 반환함. */
 /* USER_STACK 위치에 스택 페이지(PAGE) 하나를 생성함. 성공하면 true를 반환함. */
 static bool
 setup_stack (struct intr_frame *if_) {
 	bool success = false;
 	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
-
-	/* TODO: stack_bottom에 스택을 매핑하고 즉시 해당 페이지를 claim할 것.
-	 * TODO: 성공하면 rsp를 그에 맞게 설정할 것.
-	 * TODO: 해당 페이지가 스택임을 표시해야 함. */
-	/* TODO: 여기에 코드를 작성할 것 */
-
+  /* stack_bottom에 스택 페이지를 예약(SPT 등록)하고, 
+  lazy하지 않게 바로 claim해서 frame을 붙인다 */
+	if (vm_alloc_page(VM_ANON | VM_MARKER_0, stack_bottom, true) && 
+		 vm_claim_page(stack_bottom)) { 
+		/* rsp를 유저스택 맨 위로 설정을 한다. 스택은 rsp 부터 아래로 쌓인다. */
+		if_->rsp = USER_STACK;
+		success = true;
+	}
 	return success;
 }
 #endif /* VM */

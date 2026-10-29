@@ -6,6 +6,8 @@
 #include "lib/kernel/hash.h"
 #include "include/threads/vaddr.h"
 #include "include/threads/thread.h"
+#include "threads/mmu.h"
+#include <string.h>
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
 void
@@ -45,23 +47,34 @@ static struct frame *vm_evict_frame (void);
 bool
 vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		vm_initializer *init, void *aux) {
-
 	ASSERT (VM_TYPE(type) != VM_UNINIT)
-
 	struct supplemental_page_table *spt = &thread_current ()->spt;
-
-	/* upage가 이미 사용 중인지 확인한다. */
 	if (spt_find_page (spt, upage) == NULL) {
-		/* TODO: 페이지를 만들고, VM 타입에 맞는 initializer를 가져온 다음 */
-		 
-		 /* TODO: uninit_new를 불러 "uninit" 페이지 구조체를 만든다.*/
-		 
-		 /* TODO: uninit_new를 부른 뒤에 필드를 수정해야 한다. */
-		 // page->writable = writable;//
-
-		/* TODO: 페이지를 spt에 넣는다. */
-		
-	}
+		bool (*page_initializer) (struct page *, enum vm_type, void *kva);
+		switch (VM_TYPE(type)) {
+			case VM_ANON:
+				page_initializer = anon_initializer;
+				break;
+			case VM_FILE:
+				page_initializer = file_backed_initializer;
+				break;
+			default:
+				goto err;
+		}
+		struct page *page = malloc(sizeof(struct page));
+		if (page == NULL) 
+			/* 만일 말록 실패 시 커널 패닉으로 함.*/
+			PANIC("malloc fail");
+		/* UNINIT 페이지를 생성. 초기 정보 저장. */
+		uninit_new(page, upage, init, type, aux, page_initializer);
+		/* 필드에 쓰기 권한 설정 */
+		page->writable = writable;
+		if (!spt_insert_page(spt, page)) {
+			free(page);
+			goto err;
+		}
+		return true;
+}
 err:
 	return false;
 }
@@ -85,7 +98,6 @@ bool
 spt_insert_page (struct supplemental_page_table *spt UNUSED,
 		struct page *page UNUSED) {
 	int succ = false;
-	/* TODO: 이 함수를 채울 것. */
 	/* spt의 hash에 현재 페이지를 넣는다. */
 	struct hash_elem *old = hash_insert(&spt->hash, &page->hash_elem);
 	if (old == NULL)
@@ -151,41 +163,41 @@ vm_handle_wp (struct page *page UNUSED) {
 }
 
 /* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
-/* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
 bool
 vm_try_handle_fault (struct intr_frame *f, void *addr,
 		bool user, bool write, bool not_present) {
-	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
+	struct supplemental_page_table *spt = &thread_current ()->spt;
 	struct page *page = NULL;
+	uintptr_t a = (uintptr_t) addr;
+	uintptr_t rsp = user ? f->rsp : thread_current()->user_rsp;
 	ASSERT(spt);
-	/* TODO: 폴트가 유효한지 검사한다 */
 	/* 1. 사용자 주소 범위 확인 */
 	if (!is_user_vaddr(addr))
 		return false;
-	/* 2. 페이지 부재 폴트인지 확인 */
+	/* 2. 이미 있는 페이지의 권한위반인지 확인 */
 	if (!not_present)
 		return false;
 	/* 3. 페이지 시작 주소를 계산해서 spt에서 검색 */
 	void *page_addr = pg_round_down(addr); 
 	page = spt_find_page(spt, page_addr);
-	/* 4. 페이지가 없으면*/
+	/* 4. 페이지가 없으면 */
 	if (page == NULL) {
-		// 스택 확장 조건 검사 
-			// 조건을 만족하지 않으면 return false;
-			// 만족하면 vm_stack_growth로 페이지 생성->다시 검색
-		// 생성한 페이지를 SPT에서 다시 검색
+		/* 스택 확장 조건에 맞으면 스택 확장 시도 스택 크기는 문서 상 1MB이며 
+		x86-64의 PUSH 명령어는 스택 포인터를 변경하기 전에 접근 권한 확인하므로 
+		스택 포인터보다 8바이트 아래에서 페이지 폴트가 발생할 수 잇음 */		
+			if (USER_STACK - STACK_MAX <= a && a < USER_STACK && a >= rsp- 8) 
+				vm_stack_growth(addr);
 		page = spt_find_page(spt, page_addr); 
-		// 페이지 생성 실패 시 false 반환
+		/* 페이지 생성 실패 시 false 반환 */
 		if (page == NULL)
 			return false;
 	}
-	/* 5. 쓰기 권한 확인 */
+	/* 5. 쓰기 권한 확인 (예: 읽기 전용 페이지에 쓰기)*/
 	if (write && !page->writable)
 		return false;
-	/* 6. 프레임 확보 및 매핑 */
+	/* 6. 페이지가 있으면 프레임 확보 및 매핑 */
 	return vm_do_claim_page (page);
 }
-
 
 /* 페이지를 해제한다.
  * 이 함수는 수정하지 말 것. */
@@ -221,6 +233,7 @@ vm_do_claim_page (struct page *page) {
 	page->frame = frame;
 	return swap_in (page, frame->kva);
 }
+
 /* Returns a hash value for page p. */
 unsigned
 page_hash (const struct hash_elem *p_, void *aux UNUSED) {
@@ -250,24 +263,60 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
                               struct supplemental_page_table *src) {
     struct hash_iterator i;
     hash_first (&i, &src->hash);
-
     while (hash_next (&i)) {
         struct hash_elem *e = hash_cur (&i);
         struct page *page = hash_entry(e, struct page, hash_elem);
-	    /* 1. 원본 페이지의 타입과 초기화 정보 확인 */
-	    /* 2. 타입에 맞게 자식 페이지 생성 및 SPT 등록 */
-	    /* 3. 페이지 종류에 따라 초기화 정보 또는 메모리 내용 복사 - 조금 더 고민 /
-	    /* 4. 페이지 생성이나 복사에 실패하면 false 반환 */
-    }
-    return true;
+		    /* 1. 원본 페이지의 타입과 초기화 정보 확인 */
+			enum vm_type type = page->operations->type;
+			bool (*page_initializer) (struct page *, enum vm_type, void *kva);
+			switch (VM_TYPE(type)) {
+			case VM_UNINIT:
+				void *aux = NULL;
+				/* UNINIT은 예약 정보만 있는 페이지로, aux로 깊은 복사를 해두기 */
+				if (page->uninit.aux !=NULL) {
+					struct file_page *new_aux = malloc(sizeof(struct file_page)); 
+					if (new_aux==NULL)
+						PANIC("todo");
+					/* 부모 aux의 내용을 그 칸에 그대로 배낌 */
+					memcpy(new_aux, page->uninit.aux, sizeof(struct file_page));
+					aux = new_aux;
+				}
+				if (!vm_alloc_page_with_initializer(page->uninit.type, page->va, page->writable, page->uninit.init, aux)) {
+					free(aux);
+					return false;
+				}
+				if (!vm_claim_page(page->va))
+					return false;
+				break;
+			case VM_ANON:
+					enum vm_type type = VM_ANON | (page->anon.is_stack ? VM_MARKER_0 : 0);
+				/* 메모리 (부모의 frame)에만 있음. 디스크 원본이 없음. memcpy */
+				if (!vm_alloc_page(type, page->va, page->writable))
+					return false;
+				if (!vm_claim_page(page->va))
+					return false;
+				/* dst에서 페이지를 찾아서 돌려준다. 자식은 부모와 va가 일대일로 대응이 된다. */ 
+				struct page *child = spt_find_page(dst, page->va);
+				memcpy(child->frame->kva, page->frame->kva, PGSIZE);
+				break;
+			case VM_FILE:
+				// page_initializer = file_backed_initializer;
+				/* 원본 페이지를 복제하여 자식 페이지를 만듦 */
+				// child = file_duplicate(page);
+				// spt_insert_page(dst, child);
+				return false;
+			default:
+				return false;
+		}
+	}
+	return true;
 }
 
 /* 해시 요소에 해당하는 페이지를 정리한다. */
 static void
 page_destroy (struct hash_elem *e, void *aux UNUSED) {
     struct page *page = hash_entry(e, struct page, hash_elem);
-    destroy (page);
-    free (page);
+    vm_dealloc_page(page);
 }
 
 

@@ -16,7 +16,7 @@
 #include "threads/vaddr.h"
 #include "devices/input.h"
 #include "threads/init.h"
-
+#include "include/vm/vm.h"
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
@@ -122,9 +122,12 @@ void sys_exit (int status) {
  *       문자열은 copy_name()을 씀
  */
 void check_address(const void *addr) {
-	if (addr == NULL || !is_user_vaddr(addr) || pml4_get_page(thread_current()->pml4, addr) == NULL) {
+	if (addr == NULL || !is_user_vaddr(addr) || spt_find_page(&thread_current()->spt, addr) == NULL) {
 		sys_exit(-1);
-	}
+		/* lazy 로딩이라 아직 매핑 안된 정상 페이지가 있음 -> 유효성은 SPT로 판단 */
+		if (spt_find_page(&thread_current()->spt, (void *) addr) == NULL)
+			sys_exit(-1);
+}
 }
 
 /**
@@ -337,6 +340,13 @@ void fd_table_close_all(void) {
  */
 void
 syscall_handler (struct intr_frame *f UNUSED) {
+#ifdef VM
+	/* 시스템 콜 처리 중 커널이 사용자 스택에 접근하다 page fault가 나면
+	 * 그때의 f->rsp는 커널 rsp라서 스택 확장 판단에 쓸 수 없음.
+	 * 진입 시점의 사용자 rsp를 저장해 두고 vm_try_handle_fault에서 사용함. */
+	thread_current()->user_rsp = f->rsp;
+#endif
+
 	int fd = f->R.rdi;
 	switch (f->R.rax)
 	{
@@ -461,7 +471,13 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			unsigned size = (unsigned)f->R.rdx;
 
 			check_buffer(buffer, size);
-
+#ifdef VM
+			/* read는 커널이 사용자 버퍼에 대신 씀. CPU는 커널의 쓰기를 막지 않으므로, 
+			읽기 전용 페이지(예: 코드 영역)면 여기서 직접 막음 */
+			struct page *bp = spt_find_page (&thread_current ()->spt, buffer);
+			if (bp != NULL && !bp->writable)
+				sys_exit(-1);
+#endif
 			if (fd == 0) {
 				uint8_t *buf = buffer;
 				for (unsigned i = 0; i < size; i++) {
