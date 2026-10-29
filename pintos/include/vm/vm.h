@@ -36,7 +36,7 @@ struct thread;
 
 /* type에서 하위 3비트(페이지 종류)만 뽑아낸다 */
 #define VM_TYPE(type) ((type) & 7)
-
+#define STACK_MAX (1<<20)
 /* "페이지"를 나타내는 구조체.
  * 일종의 "부모 클래스"이고, 자식 클래스가 네 개 있다:
  * uninit_page, file_page, anon_page, page cache(Project 4).
@@ -102,6 +102,7 @@ bool spt_insert_page (struct supplemental_page_table *spt, struct page *page);
 void spt_remove_page (struct supplemental_page_table *spt, struct page *page);
 
 void vm_init (void);
+bool is_stack (struct intr_frame *f, void *addr, bool user);
 bool vm_try_handle_fault (struct intr_frame *f, void *addr, bool user,
 		bool write, bool not_present);
 

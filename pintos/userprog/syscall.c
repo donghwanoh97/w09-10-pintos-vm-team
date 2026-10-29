@@ -123,7 +123,13 @@ void sys_exit (int status) {
  *       문자열은 copy_name()을 씀
  */
 void check_address(const void *addr) {
-	if (addr == NULL || !is_user_vaddr(addr) || spt_find_page(&thread_current()->spt, addr) == NULL) {
+	if (addr == NULL || !is_user_vaddr(addr)) {
+		sys_exit(-1);
+	}
+	/* SPT에 없어도 스택 성장 대상이면 통과. 커널이 쓰다 fault 나면 핸들러가 키움.
+	 * 시스템 콜 안이라 user=false → is_stack이 f 대신 user_rsp를 씀 */
+	if ((spt_find_page(&thread_current()->spt, (void *) addr) == NULL) 
+	&& (!is_stack(NULL, (void *) addr, false))) {
 		sys_exit(-1);
 	}
 }
