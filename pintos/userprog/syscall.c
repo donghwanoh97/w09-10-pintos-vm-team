@@ -16,6 +16,7 @@
 #include "threads/vaddr.h"
 #include "devices/input.h"
 #include "threads/init.h"
+#include "vm/vm.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -144,14 +145,22 @@ void check_address(const void *addr) {
  * 임시: 포인터 검증 함수가 나오면 그 호출로 바꿀 것.
  * check_address()가 pml4_get_page()를 쓰므로 프로젝트 3의 lazy 페이지에는 맞지 않음.
  */
-static void check_buffer(const void *buf, size_t size) {
+static void check_buffer(const void *buf, size_t size, bool check_buf_writable) {
 	check_address(buf);
 	if (size == 0) {
 		return;
 	}
+
 	const char *end = (const char *)buf + size - 1;
-	for (const char *p = (const char *)pg_round_down(buf) + PGSIZE; p <= end; p += PGSIZE) {
+	for (const char *p = (const char *)pg_round_down(buf); p <= end; p += PGSIZE) {
 		check_address(p);
+		if (check_buf_writable) {
+			
+			struct page *page = spt_find_page(&thread_current()->spt, (void*) p);
+			if (page != NULL && !page->writable) {
+				sys_exit(-1);
+			}
+		}
 	}
 }
 
@@ -460,7 +469,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			void * buffer = (void *)f->R.rsi;
 			unsigned size = (unsigned)f->R.rdx;
 
-			check_buffer(buffer, size);
+			check_buffer(buffer, size, true);
 
 			if (fd == 0) {
 				uint8_t *buf = buffer;
@@ -507,8 +516,8 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_WRITE: {
 			const void *buffer = (const void *)f->R.rsi;
 			unsigned size = (unsigned)f->R.rdx;
-
-			check_buffer(buffer, size);
+ 
+			check_buffer(buffer, size, false);
 
 			if (fd == 1) {
 				putbuf(buffer, size);

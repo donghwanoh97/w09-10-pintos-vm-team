@@ -567,14 +567,21 @@ process_exit (void) {
 		if (parent_exited)
 			free (info);
 	}
+}
 
-	file_close(curr->using_file);
+void thread_close_using_file(struct thread* t) {
+	lock_acquire(&filesys_lock);
+	file_close(t->using_file);
+	lock_release(&filesys_lock);
+	t->using_file = NULL;
 }
 
 /* 현재 프로세스의 리소스를 해제함. */
 static void
 process_cleanup (void) {
 	struct thread *curr = thread_current ();
+
+	thread_close_using_file(curr);
 
 #ifdef VM
 	supplemental_page_table_kill (&curr->spt);
