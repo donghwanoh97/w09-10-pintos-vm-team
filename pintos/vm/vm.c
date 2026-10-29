@@ -331,7 +331,7 @@ page_destroy (struct hash_elem *e, void *aux UNUSED) {
 
 /* 보조 페이지 테이블이 가진 자원을 해제한다 */
 void
-supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
+supplemental_page_table_kill (struct supplemental_page_table *spt) {
 	/* TODO: 스레드가 가진 보조 페이지 테이블의 내용을 모두 없애고,
 	 * TODO: 수정된 내용은 모두 저장소에 다시 써 준다(write-back). */
 	hash_destroy(&spt->hash, page_destroy);
