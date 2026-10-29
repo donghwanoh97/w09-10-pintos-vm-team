@@ -267,7 +267,7 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 
 static struct lazy_load_args* duplicate_lazy_load_args(struct lazy_load_args *args) {
 	struct lazy_load_args *dup = malloc(sizeof *dup);
-	dup->file = file_duplicate(args->file);
+	dup->file = thread_current ()->using_file;
 	dup->ofs = args->ofs;
 	dup->page_read_bytes = args->page_read_bytes;
 	dup->page_zero_bytes = args->page_zero_bytes;
