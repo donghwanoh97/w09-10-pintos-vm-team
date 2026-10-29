@@ -7,6 +7,7 @@
 #include "include/threads/vaddr.h"
 #include "include/threads/thread.h"
 #include "threads/mmu.h"
+#include <string.h>
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
 void
@@ -97,7 +98,6 @@ bool
 spt_insert_page (struct supplemental_page_table *spt UNUSED,
 		struct page *page UNUSED) {
 	int succ = false;
-	/* TODO: 이 함수를 채울 것. */
 	/* spt의 hash에 현재 페이지를 넣는다. */
 	struct hash_elem *old = hash_insert(&spt->hash, &page->hash_elem);
 	if (old == NULL)
@@ -263,16 +263,53 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
                               struct supplemental_page_table *src) {
     struct hash_iterator i;
     hash_first (&i, &src->hash);
-
     while (hash_next (&i)) {
         struct hash_elem *e = hash_cur (&i);
         struct page *page = hash_entry(e, struct page, hash_elem);
-	    /* 1. 원본 페이지의 타입과 초기화 정보 확인 */
-	    /* 2. 타입에 맞게 자식 페이지 생성 및 SPT 등록 */
-	    /* 3. 페이지 종류에 따라 초기화 정보 또는 메모리 내용 복사 - 조금 더 고민 /
-	    /* 4. 페이지 생성이나 복사에 실패하면 false 반환 */
-    }
-    return true;
+		    /* 1. 원본 페이지의 타입과 초기화 정보 확인 */
+			enum vm_type type = page->operations->type;
+			bool (*page_initializer) (struct page *, enum vm_type, void *kva);
+			switch (VM_TYPE(type)) {
+			case VM_UNINIT:
+				void *aux = NULL;
+				/* UNINIT은 예약 정보만 있는 페이지로, aux로 깊은 복사를 해두기 */
+				if (page->uninit.aux !=NULL) {
+					struct file_page *new_aux = malloc(sizeof(struct file_page)); 
+					if (new_aux==NULL)
+						PANIC("todo");
+					/* 부모 aux의 내용을 그 칸에 그대로 배낌 */
+					memcpy(new_aux, page->uninit.aux, sizeof(struct file_page));
+					aux = new_aux;
+				}
+				if (!vm_alloc_page_with_initializer(page->uninit.type, page->va, page->writable, page->uninit.init, aux)) {
+					free(aux);
+					return false;
+				}
+				if (!vm_claim_page(page->va))
+					return false;
+				break;
+			case VM_ANON:
+					enum vm_type type = VM_ANON | (page->anon.is_stack ? VM_MARKER_0 : 0);
+				/* 메모리 (부모의 frame)에만 있음. 디스크 원본이 없음. memcpy */
+				if (!vm_alloc_page(type, page->va, page->writable))
+					return false;
+				if (!vm_claim_page(page->va))
+					return false;
+				/* dst에서 페이지를 찾아서 돌려준다. 자식은 부모와 va가 일대일로 대응이 된다. */ 
+				struct page *child = spt_find_page(dst, page->va);
+				memcpy(child->frame->kva, page->frame->kva, PGSIZE);
+				break;
+			case VM_FILE:
+				// page_initializer = file_backed_initializer;
+				/* 원본 페이지를 복제하여 자식 페이지를 만듦 */
+				// child = file_duplicate(page);
+				// spt_insert_page(dst, child);
+				return false;
+			default:
+				return false;
+		}
+	}
+	return true;
 }
 
 /* 해시 요소에 해당하는 페이지를 정리한다. */
