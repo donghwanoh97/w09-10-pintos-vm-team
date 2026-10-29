@@ -45,23 +45,42 @@ static struct frame *vm_evict_frame (void);
 bool
 vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		vm_initializer *init, void *aux) {
-
-	ASSERT (VM_TYPE(type) != VM_UNINIT)
-
+	ASSERT (VM_TYPE(type) != VM_UNINIT);
+	
 	struct supplemental_page_table *spt = &thread_current ()->spt;
 
 	/* upage가 이미 사용 중인지 확인한다. */
 	if (spt_find_page (spt, upage) == NULL) {
-		/* TODO: 페이지를 만들고, VM 타입에 맞는 initializer를 가져온 다음 */
-		 
-		 /* TODO: uninit_new를 불러 "uninit" 페이지 구조체를 만든다.*/
-		 
-		 /* TODO: uninit_new를 부른 뒤에 필드를 수정해야 한다. */
-		 // page->writable = writable;//
+		/* 페이지를 만들고, VM 타입에 맞는 initializer를 가져온 다음 */
+		bool (*page_initializer) (struct page *, enum vm_type, void *kva);
 
-		/* TODO: 페이지를 spt에 넣는다. */
-		
+		switch(VM_TYPE(type)) {
+			case VM_ANON:
+				page_initializer = anon_initializer;
+				break;
+			case VM_FILE:
+				page_initializer = file_backed_initializer;
+				break;
+			default:
+				goto err;
+		}
+
+		struct page *page = malloc(sizeof *page);
+		if (!page) {
+			PANIC("malloc");
+		}
+		/* uninit_new를 불러 "uninit" 페이지 구조체를 만든다.*/
+		uninit_new(page, upage, init, type, aux, page_initializer);
+
+		/* uninit_new는 page 필드를 초기화하므로 수정 필요. */
+		page->writable = writable;
+
+		/* 페이지를 spt에 넣는다. */
+		if (!spt_insert_page(spt, page)) {
+			goto err;
+		}
 	}
+	return true;
 err:
 	return false;
 }
@@ -197,7 +216,7 @@ vm_dealloc_page (struct page *page) {
 
 /* VA에 할당된 페이지를 확보(claim)한다. */
 bool
-vm_claim_page (void *va UNUSED) {
+vm_claim_page (void *va) {
 	struct page *page = NULL;
 	struct supplemental_page_table *spt = &thread_current()->spt;
 	page = spt_find_page(spt, va);
