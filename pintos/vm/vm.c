@@ -1,6 +1,7 @@
 /* vm.c: 가상 메모리 객체를 위한 공통 인터페이스. */
 #include <string.h>
 
+#include "threads/mmu.h"
 #include "threads/malloc.h"
 #include "userprog/process.h"
 #include "vm/vm.h"
@@ -58,18 +59,31 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
     if (!page)
       PANIC("kernal malloc failed");
 
-    page_initializer initializer = VM_TYPE(type) == VM_ANON ? anon_initializer : file_backed_initializer;
+    page_initializer initializer = NULL;
+    switch (VM_TYPE(type)){
+    case VM_ANON:
+      initializer = anon_initializer;
+      break;
+    case VM_FILE:
+      initializer = file_backed_initializer;
+      break;
+    }
+    
     uninit_new(page, upage, init, type, aux, initializer);
 		 
 		page->writable = writable;
 
-		if (spt_insert_page(spt, page))
-      return true;
+    if (!spt_insert_page(spt, page)){
+      vm_dealloc_page(page);
+      return false;
+    }
     
-    vm_dealloc_page(page);
+    return true;
 	}
-err:
-	return false;
+  else{
+    uninit_free_aux((struct aux *)aux);
+  	return false;
+  }  
 }
 
 /* spt에서 VA를 찾아 페이지를 돌려준다. 실패하면 NULL을 돌려준다. */
@@ -146,13 +160,31 @@ vm_get_frame (void) {
 	return frame;
 }
 
+/* frame->kva와 frame을 해제하고, page와의 연결을 끊는다.
+  즉, frame과 page는 연결이 되어 있는 상태여야 한다.
+  단, page의 메모리를 직접 해제하는 책임은 지지 않는다. */
+
 void 
-vm_remove_frame(struct frame *frame){
+vm_remove_frame(struct frame *frame, uint64_t *pml4){
   ASSERT(frame);
-  
+  ASSERT(frame->page);
+
+  struct page *page = frame->page;
+
   // TODO : frame table에서 해당 frame 제거
-  pml4_clear_page(thread_current()->pml4, frame->page->va);
+
+  // remove frame 호출 과정에서, page->va에 해당하는 PTE가 가리키는 프레임이 frame과 불일치할 수 있음
+  if (pml4_get_page(pml4, page->va) == frame->kva){
+      pml4_clear_page(pml4, page->va);
+  }
+
   palloc_free_page(frame->kva);
+  
+  // page-frame 연결 끊기
+  if (page->frame == frame){
+    page->frame = NULL;
+  }
+
   free(frame);
 }
 
@@ -173,34 +205,24 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
 	struct page *page = NULL;
 	ASSERT(spt);
-	/* TODO: 폴트가 유효한지 검사한다 */
-	/* 1. 사용자 주소 범위 확인 */
+	
 	if (!is_user_vaddr(addr))
 		return false;
-	/* 2. 페이지 부재 폴트인지 확인 */
-	if (!not_present)
-		return false;
-	/* 3. 페이지 시작 주소를 계산해서 spt에서 검색 */
-	void *page_addr = pg_round_down(addr); 
-	page = spt_find_page(spt, page_addr);
-	/* 4. 페이지가 없으면*/
-	if (page == NULL) {
-		// 스택 확장 조건 검사 
-			// 조건을 만족하지 않으면 return false;
-			// 만족하면 vm_stack_growth로 페이지 생성->다시 검색
-		// 생성한 페이지를 SPT에서 다시 검색
-		page = spt_find_page(spt, page_addr); 
-		// 페이지 생성 실패 시 false 반환
-		if (page == NULL)
-			return false;
-	}
-	/* 5. 쓰기 권한 확인 */
-	if (write && !page->writable)
-		return false;
-	/* 6. 프레임 확보 및 매핑 */
-	return vm_do_claim_page (page);
-}
 
+  if (!not_present)
+		return false;
+
+  void *page_addr = pg_round_down(addr); 
+	page = spt_find_page(spt, page_addr);
+
+  if (page == NULL)   
+    return false;
+
+  if (write && !page->writable)
+		return false;
+
+  return vm_do_claim_page (page);
+}
 
 /* 페이지를 해제한다.
  * 이 함수는 수정하지 말 것. */
@@ -225,16 +247,19 @@ vm_claim_page (void *va UNUSED) {
 static bool
 vm_do_claim_page (struct page *page) {
 	struct frame *frame = vm_get_frame ();
-	uint64_t *pml4 = thread_current()->pml4;
-	/* va -> frame 매핑 (PTE)를 추가함 */
+  frame->page = page;
+	page->frame = frame;
+
+  uint64_t *pml4 = thread_current()->pml4;
 	if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
-		vm_remove_frame(frame);
+		vm_remove_frame(frame, pml4);
 		return false;
 	}
-	frame->page = page;
-	page->frame = frame;
+
+
 	return swap_in (page, frame->kva);
 }
+
 /* Returns a hash value for page p. */
 unsigned
 page_hash (const struct hash_elem *p_, void *aux UNUSED) {
@@ -275,17 +300,21 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
     {
     case VM_UNINIT:
     {
-      struct aux * new_aux = malloc(sizeof (struct aux));
-      if (!new_aux) PANIC("kernel malloc failed.");
-
       struct uninit_page *uninit = &page->uninit;
       struct aux * aux = uninit->aux;      
-      void *new_aux_pt = malloc(aux->size);
-      if (!new_aux_pt) PANIC("kernel malloc failed.");
+      struct aux * new_aux = NULL;
+      
+      if (aux){
+        new_aux = malloc(sizeof (struct aux));
+        if (!new_aux) PANIC("kernel malloc failed.");
 
-      memcpy(new_aux_pt, aux->aux_pt, aux->size);
-      new_aux->aux_pt = new_aux_pt;
-      new_aux->size = aux->size;
+        void *new_aux_pt = malloc(aux->size);
+        if (!new_aux_pt) PANIC("kernel malloc failed.");
+
+        memcpy(new_aux_pt, aux->aux_pt, aux->size);
+        new_aux->aux_pt = new_aux_pt;
+        new_aux->size = aux->size;
+      }
 
       if (!vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux)) return false;
       if (!vm_claim_page(page->va)) return false;
@@ -293,7 +322,7 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
       break;
     case VM_ANON:
     {
-      if (!vm_alloc_page(type, page->va, page->writable)) return false; 
+      if (!vm_alloc_page(page->operations->type, page->va, page->writable)) return false; 
       if (!vm_claim_page(page->va)) return false;
       struct page *new_page = spt_find_page(&thread_current()->spt, page->va);
       memcpy(new_page->frame->kva, page->frame->kva, PGSIZE);

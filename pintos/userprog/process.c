@@ -1004,13 +1004,13 @@ lazy_load_segment (struct page *page, void *aux) {
 	struct lazy_load_args *args = (struct lazy_load_args *)((struct aux *) aux)->aux_pt;
   void *kva = page->frame->kva;
 
-  file_seek(args->file, args->ofs);
-  if (file_read (args->file, kva, args->read_bytes) != (int)args->read_bytes)
-    return false;
+  lock_acquire(&filesys_lock);
+  bool succ = file_read_at (args->file, kva, args->read_bytes, args->ofs) == (int)args->read_bytes;
+  lock_release(&filesys_lock);
 
-  memset (kva + args->read_bytes, 0, args->zero_bytes);
+  if (succ) memset (kva + args->read_bytes, 0, args->zero_bytes);
 
-  return true;
+  return succ;
 }
 
 /* FILE의 오프셋 OFS에서 시작하는 세그먼트를 주소 UPAGE에 로드함.
@@ -1059,7 +1059,6 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
 		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
 					writable, lazy_load_segment, (void *)aux)){
-      free(args);
       return false;
     }
 

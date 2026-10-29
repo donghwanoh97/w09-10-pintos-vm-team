@@ -57,7 +57,8 @@ uninit_initialize (struct page *page, void *kva) {
   bool succ = uninit->page_initializer (page, uninit->type, kva) &&
 		(init ? init (page, aux) : true);
 	
-  if (succ) uninit_free_resources(aux);
+  // 이미 page_initializer로 다른 타입으로 바뀐 후임 -> uninit 접근 불가
+  uninit_free_resources(aux);
 
   return succ;
 }
@@ -68,15 +69,23 @@ uninit_initialize (struct page *page, void *kva) {
  * PAGE will be freed by the caller. */
 static void
 uninit_destroy (struct page *page) {
-	struct uninit_page *uninit UNUSED = &page->uninit;
+	struct uninit_page *uninit = &page->uninit;
 
   uninit_free_resources(uninit->aux);
+  uninit->aux = NULL;
 }
 
 static void
 uninit_free_resources(void *aux){
-  if (!aux) return;
-  
-  free(((struct aux *)aux)->aux_pt);
+  // 다른 리소스 있을 경우 여기 추가
+  uninit_free_aux((struct aux *) aux);
+}
+
+void
+uninit_free_aux(struct aux *aux){
+  if (aux == NULL) return;
+
+  ASSERT(aux->aux_pt);
+  free(aux->aux_pt);
   free(aux);
 }
