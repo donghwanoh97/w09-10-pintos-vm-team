@@ -6,6 +6,7 @@
 #include "lib/kernel/hash.h"
 #include "include/threads/vaddr.h"
 #include "include/threads/thread.h"
+#include "include/lib/string.h"
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
 void
@@ -264,7 +265,16 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 		PANIC("SPT hash 초기화 실패");
 }
 
-/* src의 보조 페이지 테이블을 dst로 복사한다 */
+static struct lazy_load_args* duplicate_lazy_load_args(struct lazy_load_args *args) {
+	struct lazy_load_args *dup = malloc(sizeof *dup);
+	dup->file = file_duplicate(args->file);
+	dup->ofs = args->ofs;
+	dup->page_read_bytes = args->page_read_bytes;
+	dup->page_zero_bytes = args->page_zero_bytes;
+
+	return dup;
+}
+
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst,
                               struct supplemental_page_table *src) {
@@ -274,10 +284,38 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
     while (hash_next (&i)) {
         struct hash_elem *e = hash_cur (&i);
         struct page *page = hash_entry(e, struct page, hash_elem);
-	    /* 1. 원본 페이지의 타입과 초기화 정보 확인 */
-	    /* 2. 타입에 맞게 자식 페이지 생성 및 SPT 등록 */
-	    /* 3. 페이지 종류에 따라 초기화 정보 또는 메모리 내용 복사 - 조금 더 고민 /
-	    /* 4. 페이지 생성이나 복사에 실패하면 false 반환 */
+				
+				enum vm_type type = page->operations->type;
+
+				switch(VM_TYPE(type)) {
+					case VM_UNINIT:
+						struct lazy_load_args *args = duplicate_lazy_load_args(page->uninit.aux);
+						if (!vm_alloc_page_with_initializer(page_get_type(page), page->va, page->writable, page->uninit.init, (void *)args)) {
+							free(args);
+							return false;
+						}
+						break;
+					case VM_ANON:
+					case VM_FILE:
+						if (!vm_alloc_page(type, page->va, page->writable)) {
+							return false;
+						}
+						
+						struct page *new_page = spt_find_page(dst, page->va);
+
+						if (new_page == NULL) {
+							return false;
+						}
+
+						if(!vm_do_claim_page(new_page)) {
+							return false;
+						}
+
+						memcpy (new_page->frame->kva, page->frame->kva, PGSIZE);
+						break;
+					default:
+						break;
+				}
     }
     return true;
 }
