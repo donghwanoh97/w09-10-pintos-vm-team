@@ -8,11 +8,14 @@
  * function.
  * */
 
+#include "userprog/process.h"
 #include "vm/vm.h"
 #include "vm/uninit.h"
 
 static bool uninit_initialize (struct page *page, void *kva);
 static void uninit_destroy (struct page *page);
+static void uninit_free_resources(void *aux);
+
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations uninit_ops = {
@@ -51,9 +54,13 @@ uninit_initialize (struct page *page, void *kva) {
 	vm_initializer *init = uninit->init;
 	void *aux = uninit->aux;
 
-	/* TODO: You may need to fix this function. */
-	return uninit->page_initializer (page, uninit->type, kva) &&
+  bool succ = uninit->page_initializer (page, uninit->type, kva) &&
 		(init ? init (page, aux) : true);
+	
+  // 이미 page_initializer로 다른 타입으로 바뀐 후임 -> uninit 접근 불가
+  uninit_free_resources(aux);
+
+  return succ;
 }
 
 /* Free the resources hold by uninit_page. Although most of pages are transmuted
@@ -62,7 +69,23 @@ uninit_initialize (struct page *page, void *kva) {
  * PAGE will be freed by the caller. */
 static void
 uninit_destroy (struct page *page) {
-	struct uninit_page *uninit UNUSED = &page->uninit;
-	/* TODO: Fill this function.
-	 * TODO: If you don't have anything to do, just return. */
+	struct uninit_page *uninit = &page->uninit;
+
+  uninit_free_resources(uninit->aux);
+  uninit->aux = NULL;
+}
+
+static void
+uninit_free_resources(void *aux){
+  // 다른 리소스 있을 경우 여기 추가
+  uninit_free_aux((struct aux *) aux);
+}
+
+void
+uninit_free_aux(struct aux *aux){
+  if (aux == NULL) return;
+
+  ASSERT(aux->aux_pt);
+  free(aux->aux_pt);
+  free(aux);
 }

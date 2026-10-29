@@ -343,6 +343,14 @@ __do_fork (void *aux) {
 		goto error;
 
 	process_activate (current);
+
+  lock_acquire(&filesys_lock);
+  current->using_file = file_duplicate(parent->using_file);
+  lock_release(&filesys_lock);
+
+  if (!current->using_file)
+    goto error;
+
 #ifdef VM
 	supplemental_page_table_init (&current->spt);
 	if (!supplemental_page_table_copy (&current->spt, &parent->spt))
@@ -358,14 +366,22 @@ __do_fork (void *aux) {
 	 * TODO:       성공적으로 복제하기 전까지는 부모가 fork()에서 반환하면
 	 * TODO:       안 된다는 점에 주의할 것. */
 	fd_table_create();
+  if (current->fd_table == NULL)
+    goto error;
+  
+  lock_acquire(&filesys_lock);
 	for (int i = 2; i < FD_MAX; i++) {
 		if(!parent->fd_table[i]) continue;
 
 		struct file *f = file_duplicate(parent->fd_table[i]);
-		if(f == NULL) { goto error; }
+		if(f == NULL) {
+      lock_release(&filesys_lock);
+      goto error;
+    }
 		current->fd_table[i] = f;
 	}
 	
+  lock_release(&filesys_lock);
 
 	process_init ();
 
@@ -576,6 +592,11 @@ static void
 process_cleanup (void) {
 	struct thread *curr = thread_current ();
 
+  lock_acquire(&filesys_lock);
+  file_close(curr->using_file);
+  lock_release(&filesys_lock); 
+  curr->using_file = NULL;
+
 #ifdef VM
 	supplemental_page_table_kill (&curr->spt);
 #endif
@@ -666,6 +687,7 @@ static bool validate_segment (const struct Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		uint32_t read_bytes, uint32_t zero_bytes,
 		bool writable);
+static void *duplicate_lazy_load_arg(void * aux);
 
 /**
  * @brief 명령줄 FILE_NAME의 ELF 실행 파일을 현재 스레드에 로드하고 인자를 유저 스택에 쌓음
@@ -984,9 +1006,16 @@ install_page (void *upage, void *kpage, bool writable) {
 
 static bool
 lazy_load_segment (struct page *page, void *aux) {
-	/* TODO: 파일에서 세그먼트를 로드할 것 */
-	/* TODO: 주소 VA에서 첫 페이지 폴트(page fault)가 발생하면 이 함수가 호출됨. */
-	/* TODO: 이 함수를 호출할 때 VA를 사용할 수 있음. */
+	struct lazy_load_args *args = (struct lazy_load_args *)((struct aux *) aux)->aux_pt;
+  void *kva = page->frame->kva;
+
+  lock_acquire(&filesys_lock);
+  bool succ = file_read_at (args->file, kva, args->read_bytes, args->ofs) == (int)args->read_bytes;
+  lock_release(&filesys_lock);
+
+  if (succ) memset (kva + args->read_bytes, 0, args->zero_bytes);
+
+  return succ;
 }
 
 /* FILE의 오프셋 OFS에서 시작하는 세그먼트를 주소 UPAGE에 로드함.
@@ -1017,12 +1046,29 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
 		/* TODO: lazy_load_segment에 정보를 넘기기 위해 aux를 설정할 것. */
-		void *aux = NULL;
+    struct aux *aux = malloc(sizeof(struct aux));
+    if (!aux)
+      PANIC("kernal malloc failed.");
+
+    struct lazy_load_args *args = malloc(sizeof (struct lazy_load_args));
+    if (!args)
+      PANIC("kernal malloc failed.");
+    
+    args->file = file;
+    args->ofs = ofs;
+    args->read_bytes = page_read_bytes;
+    args->zero_bytes = page_zero_bytes;
+
+    aux->aux_pt = args;
+    aux->duplicate_func = duplicate_lazy_load_arg;
+
 		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-					writable, lazy_load_segment, aux))
-			return false;
+					writable, lazy_load_segment, (void *)aux)){
+      return false;
+    }
 
 		/* 다음으로 넘어감. */
+    ofs += page_read_bytes;
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
@@ -1030,17 +1076,41 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	return true;
 }
 
+static void *
+duplicate_lazy_load_arg(void * aux){
+  struct aux *src = (struct aux *)aux;
+  struct lazy_load_args *old_arg = (struct lazy_load_args *)src->aux_pt;
+  
+  struct aux *dst = malloc(sizeof(struct aux));
+  if (!dst)
+    PANIC("kernel malloc failed.");
+
+  struct lazy_load_args *new_arg = malloc(sizeof(struct lazy_load_args));
+  if (!new_arg)
+    PANIC("kernel malloc failed.");
+  
+  dst->aux_pt = new_arg;
+  new_arg->ofs = old_arg->ofs;
+  new_arg->read_bytes = old_arg->read_bytes;
+  new_arg->zero_bytes = old_arg->zero_bytes;
+  new_arg->file = thread_current()->using_file;
+  
+  return (void *)dst;
+}
+
 /* USER_STACK 위치에 스택 페이지(PAGE) 하나를 생성함. 성공하면 true를 반환함. */
 static bool
 setup_stack (struct intr_frame *if_) {
-	bool success = false;
 	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
 
-	/* TODO: stack_bottom에 스택을 매핑하고 즉시 해당 페이지를 claim할 것.
-	 * TODO: 성공하면 rsp를 그에 맞게 설정할 것.
-	 * TODO: 해당 페이지가 스택임을 표시해야 함. */
-	/* TODO: 여기에 코드를 작성할 것 */
+  if (!vm_alloc_page(VM_ANON | VM_MARKER_0, stack_bottom, true))
+    return false;
 
-	return success;
+  if (!vm_claim_page(stack_bottom))
+    return false;
+  
+  if_->rsp = USER_STACK;
+
+	return true;
 }
 #endif /* VM */
