@@ -373,13 +373,7 @@ try_copy_anon(struct page *page){
 
 static bool
 try_copy_file(struct page *page, void *aux){
-  struct lazy_load_args *old_arg = ((struct aux *) aux)->aux_pt;
-	lock_acquire(&filesys_lock);
-	struct file *file = file_reopen(old_arg->file);
-  if(!vm_alloc_and_claim(page->operations->type, page->va, page->writable))
-    return false;
-  memcpy(new_page->frame->kva, page->frame->kva, PGSIZE);
-  return true;
+  return vm_alloc_and_claim (page->operations->type, page->va, page->writable);
 }
 
 /* 해시 요소에 해당하는 페이지를 정리한다. */
