@@ -9,7 +9,7 @@ int process_exec (void *f_name);
 int process_wait (tid_t);
 void process_exit (void);
 void process_activate (struct thread *next);
-
+bool lazy_load_segment (struct page *page, void *aux);
 /**
  * @brief 유저 프로그램이 exit(status)로 남긴 종료 상태 기록
  *
