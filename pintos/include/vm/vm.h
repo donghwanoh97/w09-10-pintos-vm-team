@@ -32,15 +32,19 @@ enum vm_type {
 #endif
 
 struct page_operations;
-struct thread;
+struct thread; 
 
 /* type에서 하위 3비트(페이지 종류)만 뽑아낸다 */
 #define VM_TYPE(type) ((type) & 7)
-#define STACK_MAX (1<<20)
+#define STACK_MAX (1<<20)  /* 스택 최대 1MB */
+#define STACK_LIMIT (USER_STACK - STACK_MAX) /* 스택이 내려갈 수 있는 가장 낮은 주소 */
+#define STACK_FIRST_PAGE ((void *) (USER_STACK - PGSIZE)) /* setup_stack이 처음 만드는 스택 페이지의 va (USER_STACK 바로 아래 4KB의 시작 주소) */
+
 /* "페이지"를 나타내는 구조체.
  * 일종의 "부모 클래스"이고, 자식 클래스가 네 개 있다:
  * uninit_page, file_page, anon_page, page cache(Project 4).
  * 이 구조체에 미리 정의된 멤버는 지우거나 바꾸지 말 것. */
+
 struct page {
 	const struct page_operations *operations;
 	void *va;              /* 유저 공간 기준의 주소 */
@@ -102,7 +106,7 @@ bool spt_insert_page (struct supplemental_page_table *spt, struct page *page);
 void spt_remove_page (struct supplemental_page_table *spt, struct page *page);
 
 void vm_init (void);
-bool is_stack (struct intr_frame *f, void *addr, bool user);
+bool is_stack (void *addr, uintptr_t rsp, bool user);
 bool vm_try_handle_fault (struct intr_frame *f, void *addr, bool user,
 		bool write, bool not_present);
 
@@ -114,6 +118,7 @@ bool vm_alloc_page_with_initializer (enum vm_type type, void *upage,
 void vm_remove_frame(struct frame *frame, uint64_t *pml4);
 void vm_dealloc_page (struct page *page);
 bool vm_claim_page (void *va);
+bool vm_alloc_and_claim (enum vm_type type, void *va, bool writable);
 enum vm_type page_get_type (struct page *page);
 
 typedef bool (*page_initializer) (struct page *, enum vm_type, void *);

@@ -43,7 +43,7 @@ static struct frame *vm_get_victim (void);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_evict_frame (void);
 static page_initializer get_page_initializer(enum vm_type type);
-
+static uintptr_t cur_user_rsp (struct intr_frame *f, bool user);
 
 /* initializer와 함께 대기 중인(pending) 페이지 객체를 만든다.
  * 페이지를 만들고 싶다면 직접 만들지 말고 이 함수나
@@ -209,7 +209,7 @@ disconnect_page(struct frame *frame){
 
 /* 스택을 키운다. */
 static void
-vm_stack_growth (void *addr UNUSED) {
+vm_stack_growth (void *addr) {
 	if (!vm_alloc_page(VM_ANON | VM_MARKER_0, pg_round_down(addr), true));
 }
 
@@ -224,18 +224,21 @@ cur_user_rsp (struct intr_frame *f, bool user) {
   return rsp;
 }
 
-bool
-is_stack_range(struct intr_frame *f, void *addr, bool user) {
-  uintptr_t rsp = cur_user_rsp(f, user);
-  uintptr_t a = (uintptr_t) addr;
-  if (USER_STACK - STACK_MAX <= a && a < USER_STACK && a >= rsp - 8)
-    return true;
+static uintptr_t
+lowest_stack_addr (uintptr_t rsp, bool user) {
+  return user ? rsp - 8 : rsp; 
 }
+
 bool
-is_stack (struct intr_frame *f, void *addr, bool user) {
-	uintptr_t rsp = cur_user_rsp(f, user);
+is_stack_range(void *addr, uintptr_t rsp, bool user) {
   uintptr_t a = (uintptr_t) addr;
-	return is_stack_range(f, a, user);
+  return STACK_LIMIT <= a && a < USER_STACK && a >= lowest_stack_addr(rsp, user);
+}
+
+bool
+is_stack (void *addr, uintptr_t rsp, bool user) {
+  uintptr_t a = (uintptr_t) addr;  
+	return STACK_LIMIT <= rsp && rsp <= USER_STACK && is_stack_range(a, rsp, user);
 }
 /* 폴트 유효성 검사에 성공하면 true */
 bool
@@ -255,7 +258,8 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 	page = spt_find_page(spt, page_addr);
 
   if (page == NULL) {
-		if (is_stack(f, addr, user)) {
+    uintptr_t rsp = cur_user_rsp (f, user);
+		if (is_stack(addr, rsp, user)) {
 				vm_stack_growth(addr);
 				page = spt_find_page(spt, page_addr);
 		}
@@ -291,7 +295,7 @@ vm_claim_page (void *va UNUSED) {
 /* PAGE를 확보하고 MMU를 설정한다. */
 static bool
 vm_do_claim_page (struct page *page) {
-	struct frame *frame = vm_get_frame ();
+	struct frame *frame =vm_get_frame ();
   frame->page = page;
 	page->frame = frame;
 
@@ -367,22 +371,13 @@ try_copy_uninit(struct page *page){
   struct aux * aux = uninit->aux;      
   struct aux * new_aux = aux->duplicate_func(aux);
 
-  if (!vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux)){
-    return false;
-  }
-
-  if (!vm_claim_page(page->va)){
-    return false;
-  }
-
-  return true;
+  return vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux) && vm_claim_page(page->va);
 }
 
 static bool
 try_copy_anon(struct page *page){
-  if (!vm_alloc_page(page->operations->type, page->va, page->writable)) return false;
-  if (!vm_claim_page(page->va)) return false;
-
+  if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable))     
+    return false;
   struct page *new_page = spt_find_page(&thread_current()->spt, page->va);
   memcpy(new_page->frame->kva, page->frame->kva, PGSIZE);
 
@@ -391,10 +386,7 @@ try_copy_anon(struct page *page){
 
 static bool
 try_copy_file(struct page *page){
-  if (!vm_alloc_page(page->operations->type, page->va, page->writable)) return false;
-  if (!vm_claim_page(page->va)) return false;
-
-  return true;
+  return vm_alloc_and_claim(page->operations->type, page->va, page->writable);
 }
 
 /* 해시 요소에 해당하는 페이지를 정리한다. */
