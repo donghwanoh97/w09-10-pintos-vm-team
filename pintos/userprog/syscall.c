@@ -338,6 +338,10 @@ void fd_table_close_all(void) {
 void
 syscall_handler (struct intr_frame *f UNUSED) {
 	int fd = f->R.rdi;
+	#ifdef VM
+	thread_current ()->user_stack_rsp = f->rsp;
+	#endif
+	
 	switch (f->R.rax)
 	{
 		case SYS_HALT:
