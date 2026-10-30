@@ -10,6 +10,8 @@
 #include "include/threads/vaddr.h"
 #include "include/threads/thread.h"
 
+#define STACK_MAX (1 << 20) /* 1Mib */
+
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
 void
@@ -209,7 +211,9 @@ disconnect_page(struct frame *frame){
 
 /* 스택을 키운다. */
 static void
-vm_stack_growth (void *addr UNUSED) {
+vm_stack_growth (void *addr) {
+  if (!vm_alloc_page(VM_ANON | VM_MARKER_0, addr, true))
+    PANIC("page allocation failed.");
 }
 
 /* 쓰기 보호된(write-protected) 페이지에서 난 폴트를 처리한다. */
@@ -217,7 +221,14 @@ static bool
 vm_handle_wp (struct page *page UNUSED) {
 }
 
-/* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
+static void *get_cur_rsp(bool user, void *intr_rsp);
+static bool is_within_stack_range(void *rsp, void *addr, bool user);
+static bool is_within_stack_max(void *rsp, void *addr, bool user);
+static bool is_stack_complete(struct supplemental_page_table *spt, void *final_st_addr);
+static bool is_stack_page(struct page *page);
+
+
+/* 폴트 유효성 검사에 성공하면 true를 돌려준다. */
 bool
 vm_try_handle_fault (struct intr_frame *f, void *addr,
 		bool user, bool write, bool not_present) {
@@ -234,13 +245,70 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
   void *page_addr = pg_round_down(addr); 
 	page = spt_find_page(spt, page_addr);
 
-  if (page == NULL)   
-    return false;
+  if (page == NULL){
+    if (is_stack_growth(f, user, addr)){
+      page = spt_find_page(spt, page_addr);
+    }
+    else{
+      return false;
+    }
+  }   
 
   if (write && !page->writable)
 		return false;
 
   return vm_do_claim_page (page);
+}
+
+bool
+is_stack_growth(struct intr_frame *f, bool user, void *addr){
+  void *rsp = get_cur_rsp(user, f->rsp);
+
+  if (!is_within_stack_range(rsp, addr, user)){
+    return false;
+  }
+
+  struct supplemental_page_table *spt = &thread_current()->spt;
+  void *stack_page = pg_round_down(rsp);
+  while(spt_find_page(spt, stack_page) == NULL){
+    vm_stack_growth(stack_page);
+
+    stack_page += PGSIZE;
+  }
+
+  return is_stack_complete(spt, stack_page);
+}
+
+static void *
+get_cur_rsp(bool user, void *intr_rsp){
+  return (user) ? intr_rsp - 8: thread_current()->user_rsp;
+}
+
+static bool
+is_within_stack_range(void *rsp, void *addr, bool user){
+  if (addr >= USER_STACK) return false;
+  if (rsp > addr) return false;
+  
+  return is_within_stack_max(rsp, addr, user);
+}
+
+static bool
+is_within_stack_max(void *rsp, void *addr, bool user){
+  void *min_addr = USER_STACK - STACK_MAX;
+  if (user) return rsp + 8 >= min_addr && addr >= min_addr; /* rsp가 최하 범위를 넘는지 확인하는 것은 기존 rsp값으로 진행 */
+  else return rsp >= min_addr && addr >= min_addr;
+}
+
+static bool
+is_stack_complete(struct supplemental_page_table *spt, void *final_st_addr){
+  return is_stack_page(spt_find_page(spt, final_st_addr));
+}
+
+static bool
+is_stack_page(struct page *page){
+  enum vm_type type = page->operations->type;
+  return (type == VM_ANON && page->anon.is_stack) 
+      || (type == VM_UNINIT && IS_STACK(page->uninit.type));
 }
 
 /* 페이지를 해제한다.
@@ -303,6 +371,7 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 static bool try_copy_uninit(struct page *page);
 static bool try_copy_anon(struct page *page);
 static bool try_copy_file(struct page *page);
+static struct aux *copy_aux(struct aux *aux);
 
 
 bool
@@ -339,7 +408,7 @@ static bool
 try_copy_uninit(struct page *page){
   struct uninit_page *uninit = &page->uninit;
   struct aux * aux = uninit->aux;      
-  struct aux * new_aux = aux->duplicate_func(aux);
+  struct aux * new_aux = copy_aux(aux);
 
   if (!vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux)){
     return false;
@@ -351,6 +420,14 @@ try_copy_uninit(struct page *page){
 
   return true;
 }
+
+static struct aux *copy_aux(struct aux *aux){
+  if (aux == NULL) return NULL;
+
+  ASSERT(aux->duplicate_func);
+  return aux->duplicate_func(aux);
+}
+
 
 static bool
 try_copy_anon(struct page *page){
