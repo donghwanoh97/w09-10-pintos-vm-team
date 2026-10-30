@@ -112,8 +112,6 @@ copy_lazy_load_aux(void * aux, struct file *file){
 static void
 uninit_destroy (struct page *page) {
 	struct uninit_page *uninit = &page->uninit;
-	/* mmap 페이지면 reopen한 file의 주인이 이 페이지 → 닫기.
-	   실행 파일 페이지(VM_ANON)는 using_file을 빌려 쓴 것 → 닫지 않음 */
 	if (uninit->aux != NULL && VM_TYPE (uninit->type) == VM_FILE) {
 		struct lazy_load_args *args = ((struct aux *) uninit->aux)->aux_pt;
 		lock_acquire (&filesys_lock);

@@ -10,6 +10,7 @@
 #include "include/threads/vaddr.h"
 #include "include/threads/thread.h"
 #include "include/vm/vm.h"
+#include "userprog/syscall.c"
 #define PUSH_SIZE 8
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
@@ -79,7 +80,6 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
     page_initializer initializer = get_page_initializer(type);
     uninit_new(page, upage, init, type, aux, initializer);
 		page->writable = writable;
-
     if (!spt_insert_page(spt, page)){
       vm_dealloc_page(page);
       return false;
@@ -348,20 +348,18 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
   return true;
 }
 
+static struct aux *copy_aux(struct aux *aux){
+  if (aux == NULL) return NULL;
+  ASSERT(aux->duplicate_func);
+  return aux->duplicate_func(aux);
+}
+
 static bool
 try_copy_uninit(struct page *page){
   struct uninit_page *uninit = &page->uninit;
   struct aux * aux = uninit->aux;      
   struct aux * new_aux = copy_aux(aux);
-
   return vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux) && vm_claim_page(page->va);
-}
-
-static struct aux *copy_aux(struct aux *aux){
-  if (aux == NULL) return NULL;
-
-  ASSERT(aux->duplicate_func);
-  return aux->duplicate_func(aux);
 }
 
 static bool
@@ -374,8 +372,14 @@ try_copy_anon(struct page *page){
 }
 
 static bool
-try_copy_file(struct page *page){
-  return vm_alloc_and_claim(page->operations->type, page->va, page->writable);
+try_copy_file(struct page *page, void *aux){
+  struct lazy_load_args *old_arg = ((struct aux *) aux)->aux_pt;
+	lock_acquire(&filesys_lock);
+	struct file *file = file_reopen(old_arg->file);
+  if(!vm_alloc_and_claim(page->operations->type, page->va, page->writable))
+    return false;
+  memcpy(new_page->frame->kva, page->frame->kva, PGSIZE);
+  return true;
 }
 
 /* 해시 요소에 해당하는 페이지를 정리한다. */

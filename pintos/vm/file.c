@@ -31,7 +31,6 @@ bool
 file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 	/* Set up the handler */
 	page->operations = &file_ops;
-
 	struct file_page *file_page = &page->file;
 	return true;
 }
@@ -50,7 +49,7 @@ file_backed_swap_out (struct page *page) {
 
 static bool
 lazy_load_mmap (struct page *page, void *aux) {
-	struct lazy_load_args *args = (struct lazy_load_args *)((struct aux *) aux)->aux_pt;
+	struct lazy_load_args *args = ((struct aux *) aux)->aux_pt;
   page->file.mapped_file = args-> file;
   page->file.offset = args-> ofs;
   page->file.read_bytes = args-> read_bytes;
