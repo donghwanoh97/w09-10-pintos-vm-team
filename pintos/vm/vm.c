@@ -44,7 +44,12 @@ static struct frame *vm_get_victim (void);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_evict_frame (void);
 static page_initializer get_page_initializer(enum vm_type type);
+
+/* 스택 성장 */
 static uintptr_t cur_user_rsp (struct intr_frame *f, bool user);
+static uintptr_t lowest_stack_addr (uintptr_t rsp, bool user);
+static bool is_stack_range (void *addr, uintptr_t rsp, bool user);
+static struct page *find_page_or_grow (struct intr_frame *f, void *addr, bool user);
 
 /* initializer와 함께 대기 중인(pending) 페이지 객체를 만든다.
  * 페이지를 만들고 싶다면 직접 만들지 말고 이 함수나
@@ -64,7 +69,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
     page_initializer initializer = get_page_initializer(type);
     uninit_new(page, upage, init, type, aux, initializer);
 		page->writable = writable;
-
+    
     if (!spt_insert_page(spt, page)){
       vm_dealloc_page(page);
       return false;
@@ -254,12 +259,9 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 		bool user, bool write, bool not_present) {
 	if (!is_user_vaddr(addr) || !not_present)
 		return false;
-  
   struct page *page = find_page_or_grow(f, addr, user);
-
   if (page == NULL || (write && !page->writable))
 		return false;
-      
   return vm_do_claim_page (page);
 }
 
@@ -331,14 +333,10 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
                              struct supplemental_page_table *src) {
   struct hash_iterator i;
   hash_first (&i, &src->hash);
-
   while (hash_next (&i)) {
     struct hash_elem *e = hash_cur (&i);
     struct page *page = hash_entry(e, struct page, hash_elem);
-
-    enum vm_type type = VM_TYPE(page->operations->type);
-
-    switch (type)
+    switch (VM_TYPE(page->operations->type))
     {
     case VM_UNINIT:
       if (!try_copy_uninit(page)) return false;
