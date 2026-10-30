@@ -209,12 +209,24 @@ disconnect_page(struct frame *frame){
 
 /* 스택을 키운다. */
 static void
-vm_stack_growth (void *addr UNUSED) {
+vm_stack_growth (void *va) {
+  vm_alloc_page(VM_ANON | VM_MARKER_0, va, true);
 }
 
 /* 쓰기 보호된(write-protected) 페이지에서 난 폴트를 처리한다. */
 static bool
 vm_handle_wp (struct page *page UNUSED) {
+}
+
+static bool
+is_stack_growth (struct intr_frame *f, void *addr, bool user) {
+  uintptr_t rsp = user ? f->rsp : thread_current ()->user_stack_rsp;
+  uintptr_t va = (uintptr_t) addr;
+
+  /* 커널 모드는 PUSH가 발생하더라도 유저 스택 포인터(rsp)가 영향받지 않음 */
+  uintptr_t rsp_valid = user ? rsp - 8 : rsp;
+
+  return (va >= USER_STACK_END && va < USER_STACK && va >= rsp_valid);
 }
 
 /* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
@@ -225,7 +237,7 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 	struct page *page = NULL;
 	ASSERT(spt);
 	
-	if (!is_user_vaddr(addr))
+	if (addr == NULL || !is_user_vaddr(addr))
 		return false;
 
   if (!not_present)
@@ -234,8 +246,17 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
   void *page_addr = pg_round_down(addr); 
 	page = spt_find_page(spt, page_addr);
 
-  if (page == NULL)   
-    return false;
+  if (page == NULL) {
+    if (!is_stack_growth(f, addr, user)) {
+      return false;
+    }
+
+    vm_stack_growth(page_addr);
+    page = spt_find_page(spt, page_addr);
+    if (page == NULL) {
+      return false;
+    }
+  }
 
   if (write && !page->writable)
 		return false;
