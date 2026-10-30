@@ -3,7 +3,10 @@
 #include "vm/vm.h"
 #include <string.h>
 #include "userprog/syscall.h"
-#include "userprog/process.c"
+#include "userprog/process.h"
+#include "threads/mmu.h"
+#include "threads/malloc.h"
+#include "filesys/file.h"
 
 static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
@@ -44,7 +47,7 @@ file_backed_swap_out (struct page *page) {
 	struct file_page *file_page = &page->file;
 }
 
-bool
+static bool
 lazy_load_mmap (struct page *page, void *aux) {
 	struct lazy_load_args *args = (struct lazy_load_args *)((struct aux *) aux)->aux_pt;
   page->file.mapped_file = args-> file;
@@ -73,6 +76,7 @@ is_valid_mmap (void *addr, size_t length, struct file *file, off_t offset) {
 	if (flen == 0)
 		return false;
 	for (size_t i = 0; i < length; i += PGSIZE)
+		/* 이미 페이지가 있으면 안됨 */
 		if (spt_find_page (&thread_current ()->spt, addr + i) != NULL)
 			return false;
 	return true;
@@ -94,7 +98,7 @@ do_mmap (void *addr, size_t length, int writable, struct file *file, off_t offse
 		lock_acquire (&filesys_lock);
 		struct file *reopened = file_reopen (file);  
 		lock_release (&filesys_lock);
-		struct aux *aux = make_lazy_load_aux(offset, read_bytes, PGSIZE - read_bytes, duplicate_mmap_arg);
+		struct aux *aux = make_lazy_load_aux(reopened, offset, read_bytes, PGSIZE - read_bytes, duplicate_mmap_arg);
 		if (!vm_alloc_page_with_initializer (VM_FILE, addr, writable, lazy_load_mmap, aux))
 			return NULL;
 		addr += PGSIZE;
@@ -103,10 +107,6 @@ do_mmap (void *addr, size_t length, int writable, struct file *file, off_t offse
 		done += PGSIZE;
 	}
 	return start;
-}
-/* Do the munmap */
-void
-do_munmap (void *addr) {
 }
 
 /* Destroy the file backed page. PAGE will be freed by the caller. */
@@ -127,3 +127,15 @@ file_backed_destroy (struct page *page) {
 	lock_release(&filesys_lock);
 	}
 
+/* Do the munmap */
+void
+do_munmap (void *addr) {
+	struct supplemental_page_table *spt = &thread_current ()->spt;
+	for (;;) {
+		struct page *page = spt_find_page (spt, addr);
+		if (page == NULL || page_get_type (page) != VM_FILE)
+			break;
+		spt_remove_page (spt, page);
+		addr += PGSIZE;
+	}
+}
