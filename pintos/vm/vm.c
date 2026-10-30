@@ -303,6 +303,7 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 static bool try_copy_uninit(struct page *page);
 static bool try_copy_anon(struct page *page);
 static bool try_copy_file(struct page *page);
+static struct aux *copy_aux(struct aux *aux);
 
 
 bool
@@ -339,7 +340,7 @@ static bool
 try_copy_uninit(struct page *page){
   struct uninit_page *uninit = &page->uninit;
   struct aux * aux = uninit->aux;      
-  struct aux * new_aux = aux->duplicate_func(aux);
+  struct aux * new_aux = copy_aux(aux);
 
   if (!vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux)){
     return false;
@@ -350,6 +351,13 @@ try_copy_uninit(struct page *page){
   }
 
   return true;
+}
+
+static struct aux *copy_aux(struct aux *aux){
+  if (aux == NULL) return NULL;
+
+  ASSERT(aux->duplicate_func);
+  return aux->duplicate_func(aux);
 }
 
 static bool
