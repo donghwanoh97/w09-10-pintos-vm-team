@@ -973,10 +973,10 @@ static bool
 setup_stack (struct intr_frame *if_) {
 	uint8_t *kpage;
 	bool success = false;
-
+	void *first_stack_page = (void *) (USER_STACK - PGSIZE);
 	kpage = palloc_get_page (PAL_USER | PAL_ZERO);
 	if (kpage != NULL) {
-		success = install_page (((uint8_t *) USER_STACK) - PGSIZE, kpage, true);
+		success = install_page(first_stack_page, kpage, true);
 		if (success)
 			if_->rsp = USER_STACK;
 		else
@@ -1101,19 +1101,22 @@ duplicate_lazy_load_arg(void * aux){
   return (void *)dst;
 }
 
-/* USER_STACK 위치에 스택 페이지(PAGE) 하나를 생성함. 성공하면 true를 반환함. */
+/* 페이지를 예약하고 바로 frame을 붙임 - lazy 하지 않음 */
+bool
+vm_alloc_and_claim (enum vm_type type, void *va, bool writable) {
+	return vm_alloc_page(type, va, writable) && vm_claim_page(va);
+}
+
+
+/* USER_STACK 위치에 첫 스택 페이지 하나를 생성함. 성공하면 true를 반환함. */
 static bool
 setup_stack (struct intr_frame *if_) {
-	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
+	void *first_stack_page = (void *) (USER_STACK - PGSIZE);
 
-  if (!vm_alloc_page(VM_ANON | VM_MARKER_0, stack_bottom, true))
+  if (!vm_alloc_and_claim(VM_ANON | VM_MARKER_0, first_stack_page, true))
     return false;
 
-  if (!vm_claim_page(stack_bottom))
-    return false;
-  
   if_->rsp = USER_STACK;
-
 	return true;
 }
 #endif /* VM */

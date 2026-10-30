@@ -123,7 +123,13 @@ void sys_exit (int status) {
  *       문자열은 copy_name()을 씀
  */
 void check_address(const void *addr) {
-	if (addr == NULL || !is_user_vaddr(addr) || spt_find_page(&thread_current()->spt, addr) == NULL) {
+	if (addr == NULL || !is_user_vaddr(addr)) {
+		sys_exit(-1);
+	}
+	/* SPT에 없어도 스택 성장 대상이면 통과. 커널이 쓰다 fault 나면 핸들러가 키움.
+	 * 시스템 콜 안이라 커널 기준(user=false): user_rsp를 넘기고 rsp 위만 허용 */
+	if ((spt_find_page(&thread_current()->spt, (void *) addr) == NULL) 
+	&& (!is_stack((void *) addr, thread_current()->user_rsp, false))) {
 		sys_exit(-1);
 	}
 }
@@ -345,6 +351,12 @@ void fd_table_close_all(void) {
  */
 void
 syscall_handler (struct intr_frame *f UNUSED) {
+#ifdef VM
+	/* 시스템 콜 처리 중 커널이 사용자 스택에 접근하다 page fault가 나면 
+	* 그때의 f->rsp는 커널 rsp라서 스택 확장 판단에 쓸 수 없음. 
+	* 진입 시점의 사용자 rsp를 저장해두고 vm_try_handle_fault에 사용함 */
+	thread_current()->user_rsp = f->rsp;
+#endif
 	int fd = f->R.rdi;
 	switch (f->R.rax)
 	{

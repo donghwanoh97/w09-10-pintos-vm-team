@@ -9,7 +9,8 @@
 #include "lib/kernel/hash.h"
 #include "include/threads/vaddr.h"
 #include "include/threads/thread.h"
-
+#include "include/vm/vm.h"
+#define PUSH_SIZE 8
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
 void
@@ -43,7 +44,7 @@ static struct frame *vm_get_victim (void);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_evict_frame (void);
 static page_initializer get_page_initializer(enum vm_type type);
-
+static uintptr_t cur_user_rsp (struct intr_frame *f, bool user);
 
 /* initializer와 함께 대기 중인(pending) 페이지 객체를 만든다.
  * 페이지를 만들고 싶다면 직접 만들지 말고 이 함수나
@@ -176,22 +177,16 @@ void
 vm_remove_frame(struct frame *frame, uint64_t *pml4){
   ASSERT(frame);
   ASSERT(frame->page);
-
   // TODO : frame table에서 해당 frame 제거
-
   remove_pte_from_pml4(frame, pml4); 
-
   palloc_free_page(frame->kva);
-  
   disconnect_page(frame);
-
   free(frame);
 }
 
 static void
 remove_pte_from_pml4(struct frame *frame, uint64_t *pml4){
   struct page *page = frame->page;
-
   // remove frame 호출 과정에서, page->va에 해당하는 PTE가 가리키는 프레임이 frame과 불일치할 수 있음
   if (pml4_get_page(pml4, page->va) == frame->kva){
       pml4_clear_page(pml4, page->va);
@@ -209,37 +204,62 @@ disconnect_page(struct frame *frame){
 
 /* 스택을 키운다. */
 static void
-vm_stack_growth (void *addr UNUSED) {
+vm_stack_growth (void *addr) {
+	vm_alloc_page(VM_ANON | VM_MARKER_0, pg_round_down(addr), true);
 }
 
 /* 쓰기 보호된(write-protected) 페이지에서 난 폴트를 처리한다. */
 static bool
 vm_handle_wp (struct page *page UNUSED) {
+	return false;   /* COW 할 때 구현 */
 }
 
-/* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
+static uintptr_t
+cur_user_rsp (struct intr_frame *f, bool user) {
+  uintptr_t rsp = user ? f->rsp : thread_current()->user_rsp;
+  return rsp;
+}
+
+static uintptr_t
+lowest_stack_addr (uintptr_t rsp, bool user) {
+  return user ? rsp - PUSH_SIZE : rsp;
+}
+
+static bool
+is_stack_range(void *addr, uintptr_t rsp, bool user) {
+  uintptr_t a = (uintptr_t) addr;
+  return STACK_LIMIT <= a && a < USER_STACK && a >= lowest_stack_addr(rsp, user);
+}
+
+bool
+is_stack (void *addr, uintptr_t rsp, bool user) {
+	return STACK_LIMIT <= rsp && rsp <= USER_STACK && is_stack_range(addr, rsp, user);
+}
+
+static struct page *
+find_page_or_grow (struct intr_frame *f, void *addr, bool user) {
+  struct supplemental_page_table *spt = &thread_current ()->spt;
+  struct page *page = spt_find_page(spt, addr);
+  if (page != NULL)
+    return page;
+	if (!is_stack(addr, cur_user_rsp(f, user), user))
+      return NULL;
+  vm_stack_growth(addr);
+	return spt_find_page(spt, addr);
+}
+
+/* 폴트 유효성 검사에 성공하면 true */
 bool
 vm_try_handle_fault (struct intr_frame *f, void *addr,
 		bool user, bool write, bool not_present) {
-	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
-	struct page *page = NULL;
-	ASSERT(spt);
-	
-	if (!is_user_vaddr(addr))
+	if (!is_user_vaddr(addr) || !not_present)
 		return false;
+  
+  struct page *page = find_page_or_grow(f, addr, user);
 
-  if (!not_present)
+  if (page == NULL || (write && !page->writable))
 		return false;
-
-  void *page_addr = pg_round_down(addr); 
-	page = spt_find_page(spt, page_addr);
-
-  if (page == NULL)   
-    return false;
-
-  if (write && !page->writable)
-		return false;
-
+      
   return vm_do_claim_page (page);
 }
 
@@ -253,7 +273,7 @@ vm_dealloc_page (struct page *page) {
 
 /* VA에 할당된 페이지를 확보(claim)한다. */
 bool
-vm_claim_page (void *va UNUSED) {
+vm_claim_page (void *va) {
 	struct supplemental_page_table *spt = &thread_current()->spt;
 	struct page *page = spt_find_page(spt, va);
 	if (page == NULL) 
@@ -265,7 +285,7 @@ vm_claim_page (void *va UNUSED) {
 /* PAGE를 확보하고 MMU를 설정한다. */
 static bool
 vm_do_claim_page (struct page *page) {
-	struct frame *frame = vm_get_frame ();
+	struct frame *frame =vm_get_frame ();
   frame->page = page;
 	page->frame = frame;
 
@@ -294,7 +314,7 @@ page_less (const struct hash_elem *a_,
 }
 
 void
-supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+supplemental_page_table_init (struct supplemental_page_table *spt) {
 	ASSERT(spt);
 	if (!hash_init(&spt->hash, page_hash, page_less, NULL))
 		PANIC("SPT hash 초기화 실패");
@@ -342,15 +362,7 @@ try_copy_uninit(struct page *page){
   struct aux * aux = uninit->aux;      
   struct aux * new_aux = copy_aux(aux);
 
-  if (!vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux)){
-    return false;
-  }
-
-  if (!vm_claim_page(page->va)){
-    return false;
-  }
-
-  return true;
+  return vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux) && vm_claim_page(page->va);
 }
 
 static struct aux *copy_aux(struct aux *aux){
@@ -362,9 +374,8 @@ static struct aux *copy_aux(struct aux *aux){
 
 static bool
 try_copy_anon(struct page *page){
-  if (!vm_alloc_page(page->operations->type, page->va, page->writable)) return false;
-  if (!vm_claim_page(page->va)) return false;
-
+  if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable))     
+    return false;
   struct page *new_page = spt_find_page(&thread_current()->spt, page->va);
   memcpy(new_page->frame->kva, page->frame->kva, PGSIZE);
 
@@ -373,10 +384,7 @@ try_copy_anon(struct page *page){
 
 static bool
 try_copy_file(struct page *page){
-  if (!vm_alloc_page(page->operations->type, page->va, page->writable)) return false;
-  if (!vm_claim_page(page->va)) return false;
-
-  return true;
+  return vm_alloc_and_claim(page->operations->type, page->va, page->writable);
 }
 
 /* 해시 요소에 해당하는 페이지를 정리한다. */
@@ -389,6 +397,6 @@ page_destroy (struct hash_elem *e, void *aux UNUSED) {
 
 /* 보조 페이지 테이블이 가진 자원을 해제한다 */
 void
-supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
+supplemental_page_table_kill (struct supplemental_page_table *spt) {
 	hash_destroy(&spt->hash, page_destroy);
 }
