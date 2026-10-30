@@ -72,8 +72,7 @@ is_valid_mmap (void *addr, size_t length, struct file *file, off_t offset) {
 	lock_release (&filesys_lock);
 	if (flen == 0)
 		return false;
-
-	for (size_t i = 0; i < length; i += PGSIZE)   /* 기존 페이지와 겹침 */
+	for (size_t i = 0; i < length; i += PGSIZE)
 		if (spt_find_page (&thread_current ()->spt, addr + i) != NULL)
 			return false;
 	return true;
@@ -88,26 +87,20 @@ do_mmap (void *addr, size_t length, int writable, struct file *file, off_t offse
 	lock_acquire (&filesys_lock);
 	off_t file_left = file_length (file) - offset;
 	lock_release (&filesys_lock);
-	while (length > 0) {
-		size_t read_bytes = file_left < PGSIZE ? (file_left > 0 ? file_left : 0) : PGSIZE;
-		struct lazy_load_args *args = malloc (sizeof *args);
-		struct aux *aux = malloc (sizeof *aux);
-		if (args == NULL || aux == NULL)
-			PANIC ("kernel malloc failed.");
+	size_t done = 0;
+	while (done < length) {
+		size_t read_bytes = file_left <= 0 ? 0
+											: file_left < PGSIZE ? file_left : PGSIZE;
 		lock_acquire (&filesys_lock);
-		args->file = file_reopen (file);  
+		struct file *reopened = file_reopen (file);  
 		lock_release (&filesys_lock);
-		args->ofs = offset;
-		args->read_bytes = read_bytes;
-		args->zero_bytes = PGSIZE - read_bytes;
-		aux->aux_pt = args;
-		aux->duplicate_func = duplicate_mmap_arg;
+		struct aux *aux = make_lazy_load_aux(offset, read_bytes, PGSIZE - read_bytes, duplicate_mmap_arg);
 		if (!vm_alloc_page_with_initializer (VM_FILE, addr, writable, lazy_load_mmap, aux))
 			return NULL;
 		addr += PGSIZE;
 		offset += read_bytes;
 		file_left -= read_bytes;
-		length = length > PGSIZE ? length - PGSIZE : 0;
+		done += PGSIZE;
 	}
 	return start;
 }
@@ -116,19 +109,21 @@ void
 do_munmap (void *addr) {
 }
 
-/* Destory the file backed page. PAGE will be freed by the caller. */
+/* Destroy the file backed page. PAGE will be freed by the caller. */
 static void
 file_backed_destroy (struct page *page) {
 	struct file_page *file_page = &page->file;
 	struct thread *cur = thread_current();
-	if (page->frame != NULL)
+	if (page->frame != NULL) {
 		if (pml4_is_dirty (cur->pml4, page->va)) {
 			lock_acquire(&filesys_lock);
-			file_write_at(file, buffer, size, file_ofs);
+			file_write_at(file_page->mapped_file, page->frame->kva, file_page->read_bytes, file_page->offset);
 			lock_release(&filesys_lock);		
 		}
 		vm_remove_frame(page->frame, cur->pml4);
 	}
+	lock_acquire(&filesys_lock);
+	file_close(file_page->mapped_file);
+	lock_release(&filesys_lock);
+	}
 
-
-}
