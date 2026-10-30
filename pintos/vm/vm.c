@@ -209,8 +209,8 @@ disconnect_page(struct frame *frame){
 
 /* 스택을 키운다. */
 static void
-vm_stack_growth (void *addr UNUSED) {
-  
+vm_stack_growth (void *va) {
+  vm_alloc_page(VM_ANON, va, true);
 }
 
 /* 쓰기 보호된(write-protected) 페이지에서 난 폴트를 처리한다. */
@@ -248,8 +248,11 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
       return false;
     }
 
-    // todo
-    // vm_stack_growth(addr);
+    vm_stack_growth(page_addr);
+    page = spt_find_page(spt, page_addr);
+    if (page == NULL) {
+      return false;
+    }
   }
 
   if (write && !page->writable)
