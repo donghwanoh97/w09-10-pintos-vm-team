@@ -224,7 +224,7 @@ is_addr_user_stack (struct intr_frame *f, void *addr, bool user) {
   uintptr_t va = (uintptr_t) addr;
 
   /* 커널 모드는 PUSH가 발생하더라도 유저 스택 포인터(rsp)가 영향받지 않음 */
-  uintptr_t rsp_valid = user ? rsp : rsp - 8;
+  uintptr_t rsp_valid = user ? rsp - 8 : rsp;
 
   return (va >= USER_STACK_END && va < USER_STACK && va >= rsp_valid);
 }
