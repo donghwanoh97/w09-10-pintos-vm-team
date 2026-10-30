@@ -44,6 +44,7 @@ static struct frame *vm_get_victim (void);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_evict_frame (void);
 static page_initializer get_page_initializer(enum vm_type type);
+static struct supplemental_page_table * cur_spt(void) {return &thread_current()->spt;}
 
 /* 스택 성장 */
 static uintptr_t cur_user_rsp (struct intr_frame *f, bool user);
@@ -243,14 +244,13 @@ is_stack (void *addr, uintptr_t rsp, bool user) {
 
 static struct page *
 find_page_or_grow (struct intr_frame *f, void *addr, bool user) {
-  struct supplemental_page_table *spt = &thread_current ()->spt;
-  struct page *page = spt_find_page(spt, addr);
+  struct page *page = spt_find_page(cur_spt(), addr);
   if (page != NULL)
     return page;
 	if (!is_stack(addr, cur_user_rsp(f, user), user))
       return NULL;
   vm_stack_growth(addr);
-	return spt_find_page(spt, addr);
+	return spt_find_page(cur_spt(), addr);
 }
 
 /* 폴트 유효성 검사에 성공하면 true */
@@ -276,8 +276,7 @@ vm_dealloc_page (struct page *page) {
 /* VA에 할당된 페이지를 확보(claim)한다. */
 bool
 vm_claim_page (void *va) {
-	struct supplemental_page_table *spt = &thread_current()->spt;
-	struct page *page = spt_find_page(spt, va);
+	struct page *page = spt_find_page(spt(), va);
 	if (page == NULL) 
 		return false;
 
@@ -290,13 +289,11 @@ vm_do_claim_page (struct page *page) {
 	struct frame *frame =vm_get_frame ();
   frame->page = page;
 	page->frame = frame;
-
   uint64_t *pml4 = thread_current()->pml4;
 	if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
 		vm_remove_frame(frame, pml4);
 		return false;
 	}
-
 	return swap_in (page, frame->kva);
 }
 
@@ -311,7 +308,6 @@ page_less (const struct hash_elem *a_,
            const struct hash_elem *b_, void *aux UNUSED) {
   const struct page *a = hash_entry (a_, struct page, hash_elem);
   const struct page *b = hash_entry (b_, struct page, hash_elem);
-
   return a->va < b->va;
 }
 
@@ -326,7 +322,6 @@ static bool try_copy_uninit(struct page *page);
 static bool try_copy_anon(struct page *page);
 static bool try_copy_file(struct page *page);
 static struct aux *copy_aux(struct aux *aux);
-
 
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst,
@@ -359,13 +354,11 @@ try_copy_uninit(struct page *page){
   struct uninit_page *uninit = &page->uninit;
   struct aux * aux = uninit->aux;      
   struct aux * new_aux = copy_aux(aux);
-
   return vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux) && vm_claim_page(page->va);
 }
 
 static struct aux *copy_aux(struct aux *aux){
   if (aux == NULL) return NULL;
-
   ASSERT(aux->duplicate_func);
   return aux->duplicate_func(aux);
 }
@@ -374,9 +367,8 @@ static bool
 try_copy_anon(struct page *page){
   if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable))     
     return false;
-  struct page *new_page = spt_find_page(&thread_current()->spt, page->va);
+  struct page *new_page = spt_find_page(cur_spt(), page->va);
   memcpy(new_page->frame->kva, page->frame->kva, PGSIZE);
-
   return true;
 }
 
