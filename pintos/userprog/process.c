@@ -266,30 +266,13 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 	void *parent_page;
 	void *newpage;
 	bool writable;
-
-	/* 1. TODO: parent_page가 커널 페이지이면 즉시 반환할 것. */
 	if (is_kernel_vaddr(va)) return true;
-
-	/* 2. 부모의 페이지 맵 레벨 4(page map level 4)에서 VA를 찾음. */
 	parent_page = pml4_get_page(parent->pml4, va);
-
-
-	/* 3. TODO: 자식을 위한 새 PAL_USER 페이지를 할당하고 결과를
-	 *    TODO: NEWPAGE에 저장할 것. */
 	newpage = palloc_get_page(PAL_USER);
 	if(newpage == NULL) return false;
-	
-	/* 4. TODO: 부모의 페이지를 새 페이지로 복제하고,
-	 *    TODO: 부모의 페이지가 쓰기 가능한지 확인할 것 (그 결과에 따라
-	 *    TODO: WRITABLE을 설정). */
 	memcpy(newpage, parent_page, PGSIZE);
-
 	writable = is_writable(pte);
-
-	/* 5. 새 페이지를 WRITABLE 권한으로 자식의 페이지 테이블의
-	 *    주소 VA에 추가함. */
 	if (!pml4_set_page (current->pml4, va, newpage, writable)) {
-		/* 6. TODO: 페이지 삽입에 실패하면 오류 처리를 할 것. */
 		palloc_free_page(newpage);
 		return false;
 	}
@@ -360,11 +343,6 @@ __do_fork (void *aux) {
 		goto error;
 #endif
 
-	/* TODO: 여기에 코드를 작성할 것.
-	 * TODO: 힌트) 파일 객체를 복제하려면 include/filesys/file.h의
-	 * TODO:       `file_duplicate`를 사용할 것. 이 함수가 부모의 리소스를
-	 * TODO:       성공적으로 복제하기 전까지는 부모가 fork()에서 반환하면
-	 * TODO:       안 된다는 점에 주의할 것. */
 	fd_table_create();
   if (current->fd_table == NULL)
     goto error;
@@ -471,10 +449,7 @@ process_exec (void *f_name) {
  */
 int
 process_wait (tid_t child_tid) {
-	/* XXX: 힌트) process_wait (initd)를 하면 pintos가 종료되므로,
-	 * XXX:       process_wait를 구현하기 전에 여기에 무한 루프를
-	 * XXX:       추가해 두기를 권장함. */
-	
+
 	struct thread *curr = thread_current();
 	struct list_elem *e = list_begin(&curr->children);
 	
@@ -1001,25 +976,11 @@ install_page (void *upage, void *kpage, bool writable) {
 	/* 그 가상 주소에 이미 페이지가 없는지 확인한 다음,
 	 * 우리 페이지를 거기에 매핑함. */
 	return (pml4_get_page (t->pml4, upage) == NULL
-			&& pml4_set_page (t->pml4, upage, kpage, writable));
+				&& pml4_set_page (t->pml4, upage, kpage, writable));
 }
 #else
 /* 여기서부터의 코드는 project 3 이후에 사용됨.
  * project 2 전용 함수를 구현하려면 위쪽 블록에 구현할 것. */
-
-static bool
-lazy_load_segment (struct page *page, void *aux) {
-	struct lazy_load_args *args = (struct lazy_load_args *)((struct aux *) aux)->aux_pt;
-  void *kva = page->frame->kva;
-
-  lock_acquire(&filesys_lock);
-  bool succ = file_read_at (args->file, kva, args->read_bytes, args->ofs) == (int)args->read_bytes;
-  lock_release(&filesys_lock);
-
-  if (succ) memset (kva + args->read_bytes, 0, args->zero_bytes);
-
-  return succ;
-}
 
 /* FILE의 오프셋 OFS에서 시작하는 세그먼트를 주소 UPAGE에 로드함.
  * 총 READ_BYTES + ZERO_BYTES 바이트의 가상 메모리가 다음과 같이
@@ -1040,37 +1001,11 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
 	ASSERT (pg_ofs (upage) == 0);
 	ASSERT (ofs % PGSIZE == 0);
-
 	while (read_bytes > 0 || zero_bytes > 0) {
-		/* 이 페이지를 어떻게 채울지 계산함.
-		 * FILE에서 PAGE_READ_BYTES 바이트를 읽고
-		 * 마지막 PAGE_ZERO_BYTES 바이트는 0으로 채울 것임. */
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
-
-		/* TODO: lazy_load_segment에 정보를 넘기기 위해 aux를 설정할 것. */
-    struct aux *aux = malloc(sizeof(struct aux));
-    if (!aux)
-      PANIC("kernal malloc failed.");
-
-    struct lazy_load_args *args = malloc(sizeof (struct lazy_load_args));
-    if (!args)
-      PANIC("kernal malloc failed.");
-    
-    args->file = file;
-    args->ofs = ofs;
-    args->read_bytes = page_read_bytes;
-    args->zero_bytes = page_zero_bytes;
-
-    aux->aux_pt = args;
-    aux->duplicate_func = duplicate_lazy_load_arg;
-
-		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-					writable, lazy_load_segment, (void *)aux)){
-      return false;
-    }
-
-		/* 다음으로 넘어감. */
+    struct aux *aux = make_lazy_load_aux(file, ofs, page_read_bytes, page_zero_bytes, duplicate_lazy_load_arg);
+		if (!vm_alloc_page_with_initializer (VM_ANON, upage, writable, lazy_load_segment, (void *)aux)){ return false; }
     ofs += page_read_bytes;
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
@@ -1080,33 +1015,9 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 }
 
 static void *
-duplicate_lazy_load_arg(void * aux){
-  struct aux *src = (struct aux *)aux;
-  struct lazy_load_args *old_arg = (struct lazy_load_args *)src->aux_pt;
-  
-  struct aux *dst = malloc(sizeof(struct aux));
-  if (!dst)
-    PANIC("kernel malloc failed.");
-
-  struct lazy_load_args *new_arg = malloc(sizeof(struct lazy_load_args));
-  if (!new_arg)
-    PANIC("kernel malloc failed.");
-  
-  dst->aux_pt = new_arg;
-  new_arg->ofs = old_arg->ofs;
-  new_arg->read_bytes = old_arg->read_bytes;
-  new_arg->zero_bytes = old_arg->zero_bytes;
-  new_arg->file = thread_current()->using_file;
-  
-  return (void *)dst;
+duplicate_lazy_load_arg(void *aux) { 
+	return copy_lazy_load_aux(aux, thread_current()->using_file);
 }
-
-/* 페이지를 예약하고 바로 frame을 붙임 - lazy 하지 않음 */
-bool
-vm_alloc_and_claim (enum vm_type type, void *va, bool writable) {
-	return vm_alloc_page(type, va, writable) && vm_claim_page(va);
-}
-
 
 /* USER_STACK 위치에 첫 스택 페이지 하나를 생성함. 성공하면 true를 반환함. */
 static bool

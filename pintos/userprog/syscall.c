@@ -592,6 +592,23 @@ syscall_handler (struct intr_frame *f UNUSED) {
 
 			break;
 		}
+		case SYS_MMAP: {
+			void *addr = (void *) f->R.rdi;
+			size_t length = f->R.rsi;
+			int writable = f->R.rdx;
+			int fd = f->R.r10;
+			off_t offset = f->R.r8;
+			struct file *file = (fd == 0 || fd == 1) ? NULL : fd_get (fd);
+			if (file == NULL) {
+				f->R.rax = (uint64_t) NULL;
+				break;
+			}
+			f->R.rax = (uint64_t) do_mmap(addr, length, writable, file, offset);
+			break;
+		}
+		case SYS_MUNMAP:
+			do_munmap ((void *) f->R.rdi);
+			break;
 		case SYS_CLOSE:
 			fd_close(fd);	// 잘못된 fd나 이미 닫은 fd는 그냥 무시
 			break;
