@@ -997,7 +997,6 @@ setup_stack (struct intr_frame *if_) {
 static bool
 install_page (void *upage, void *kpage, bool writable) {
 	struct thread *t = thread_current ();
-
 	/* 그 가상 주소에 이미 페이지가 없는지 확인한 다음,
 	 * 우리 페이지를 거기에 매핑함. */
 	return (pml4_get_page (t->pml4, upage) == NULL
@@ -1007,18 +1006,50 @@ install_page (void *upage, void *kpage, bool writable) {
 /* 여기서부터의 코드는 project 3 이후에 사용됨.
  * project 2 전용 함수를 구현하려면 위쪽 블록에 구현할 것. */
 
-static bool
+bool
 lazy_load_segment (struct page *page, void *aux) {
 	struct lazy_load_args *args = (struct lazy_load_args *)((struct aux *) aux)->aux_pt;
   void *kva = page->frame->kva;
-
   lock_acquire(&filesys_lock);
-  bool succ = file_read_at (args->file, kva, args->read_bytes, args->ofs) == (int)args->read_bytes;
+  bool succ = file_read_at (args->file, kva, args->read_bytes, args->ofs) == (off_t)args->read_bytes;
   lock_release(&filesys_lock);
-
   if (succ) memset (kva + args->read_bytes, 0, args->zero_bytes);
-
   return succ;
+}
+
+bool
+lazy_load_mmap (struct page *page, void *aux) {
+	struct lazy_load_args *args = (struct lazy_load_args *)((struct aux *) aux)->aux_pt;
+  void *kva = page->frame->kva;
+  page->file.mapped_file = args-> file;  
+  page->file.offset = args-> ofs; 
+  page->file.read_bytes = args-> read_bytes;
+  return lazy_load_segment(page, aux);
+}
+
+static bool
+is_valid_mmap(void *addr, size_t length, int writable,
+		struct file *file, off_t offset) {
+	if (addr == NULL || length == 0 || offset % PGSIZE != 0 !(is_user_vaddr(addr) || !is_user_vaddr(addr + length -1)))
+		return false;
+	if (file_length(file) = 0)
+		return false;
+}
+/* Do the mmap */
+void *
+do_mmap (void *addr, size_t length, int writable,
+		struct file *file, off_t offset) {
+		if (!is_valid_mmap(addr, length, writable, file, offset))
+			return NULL;
+		void start = addr;
+		while (addr != start + length) {
+			// 파일마다 페이지를 얻는다
+			file_reopen(); 
+			// 페이지 얻었다 
+			vm_alloc_page_initializer(VM_FILE, upage, writable, lazy_load_mmap, void *aux);
+			// 
+			addr + PGSIZE;
+		}
 }
 
 /* FILE의 오프셋 OFS에서 시작하는 세그먼트를 주소 UPAGE에 로드함.
@@ -1082,22 +1113,17 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static void *
 duplicate_lazy_load_arg(void * aux){
   struct aux *src = (struct aux *)aux;
-  struct lazy_load_args *old_arg = (struct lazy_load_args *)src->aux_pt;
-  
-  struct aux *dst = malloc(sizeof(struct aux));
-  if (!dst)
+	struct aux *dst = malloc(sizeof(struct aux));
+	struct lazy_load_args *old_arg = (struct lazy_load_args *)src->aux_pt;
+	struct lazy_load_args *new_arg = malloc(sizeof(struct lazy_load_args));
+  if (!new_arg || !dst)
     PANIC("kernel malloc failed.");
-
-  struct lazy_load_args *new_arg = malloc(sizeof(struct lazy_load_args));
-  if (!new_arg)
-    PANIC("kernel malloc failed.");
-  
   dst->aux_pt = new_arg;
   new_arg->ofs = old_arg->ofs;
   new_arg->read_bytes = old_arg->read_bytes;
   new_arg->zero_bytes = old_arg->zero_bytes;
   new_arg->file = thread_current()->using_file;
-  
+	dst->dulicate_func = src->duplicate_func;
   return (void *)dst;
 }
 
@@ -1107,15 +1133,12 @@ vm_alloc_and_claim (enum vm_type type, void *va, bool writable) {
 	return vm_alloc_page(type, va, writable) && vm_claim_page(va);
 }
 
-
 /* USER_STACK 위치에 첫 스택 페이지 하나를 생성함. 성공하면 true를 반환함. */
 static bool
 setup_stack (struct intr_frame *if_) {
 	void *first_stack_page = (void *) (USER_STACK - PGSIZE);
-
   if (!vm_alloc_and_claim(VM_ANON | VM_MARKER_0, first_stack_page, true))
     return false;
-
   if_->rsp = USER_STACK;
 	return true;
 }
