@@ -210,7 +210,7 @@ disconnect_page(struct frame *frame){
 /* 스택을 키운다. */
 static void
 vm_stack_growth (void *addr UNUSED) {
-	vm_alloc_page(VM_ANON | VM_MARKER_0, pg_round_down(addr), true);
+	if (!vm_alloc_page(VM_ANON | VM_MARKER_0, pg_round_down(addr), true));
 }
 
 /* 쓰기 보호된(write-protected) 페이지에서 난 폴트를 처리한다. */
@@ -218,13 +218,26 @@ static bool
 vm_handle_wp (struct page *page UNUSED) {
 }
 
+static uintptr_t
+cur_user_rsp (struct intr_frame *f, bool user) {
+  uintptr_t rsp = user ? f->rsp : thread_current()->user_rsp;
+  return rsp;
+}
+
+bool
+is_stack_range(struct intr_frame *f, void *addr, bool user) {
+  uintptr_t rsp = cur_user_rsp(f, user);
+  uintptr_t a = (uintptr_t) addr;
+  if (USER_STACK - STACK_MAX <= a && a < USER_STACK && a >= rsp - 8)
+    return true;
+}
 bool
 is_stack (struct intr_frame *f, void *addr, bool user) {
-	uintptr_t rsp = user ? f->rsp : thread_current()->user_rsp;
-	uintptr_t a = (uintptr_t) addr;
-	return USER_STACK - STACK_MAX <= a && a < USER_STACK && a >= rsp - 8;
+	uintptr_t rsp = cur_user_rsp(f, user);
+  uintptr_t a = (uintptr_t) addr;
+	return is_stack_range(f, a, user);
 }
-/* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
+/* 폴트 유효성 검사에 성공하면 true */
 bool
 vm_try_handle_fault (struct intr_frame *f, void *addr,
 		bool user, bool write, bool not_present) {
@@ -236,7 +249,7 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 		return false;
 
   if (!not_present)
-		return false;
+    return false;
 
   void *page_addr = pg_round_down(addr); 
 	page = spt_find_page(spt, page_addr);
@@ -251,8 +264,8 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 		return false;
 
   if (write && !page->writable)
-		return false;
-
+      return false;
+      
   return vm_do_claim_page (page);
 }
 
