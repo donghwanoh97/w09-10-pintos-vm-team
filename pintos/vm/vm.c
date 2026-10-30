@@ -10,6 +10,7 @@
 #include "include/threads/vaddr.h"
 #include "include/threads/thread.h"
 #include "include/vm/vm.h"
+#define PUSH_SIZE 8
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
 void
@@ -176,22 +177,16 @@ void
 vm_remove_frame(struct frame *frame, uint64_t *pml4){
   ASSERT(frame);
   ASSERT(frame->page);
-
   // TODO : frame table에서 해당 frame 제거
-
   remove_pte_from_pml4(frame, pml4); 
-
   palloc_free_page(frame->kva);
-  
   disconnect_page(frame);
-
   free(frame);
 }
 
 static void
 remove_pte_from_pml4(struct frame *frame, uint64_t *pml4){
   struct page *page = frame->page;
-
   // remove frame 호출 과정에서, page->va에 해당하는 PTE가 가리키는 프레임이 frame과 불일치할 수 있음
   if (pml4_get_page(pml4, page->va) == frame->kva){
       pml4_clear_page(pml4, page->va);
@@ -210,12 +205,13 @@ disconnect_page(struct frame *frame){
 /* 스택을 키운다. */
 static void
 vm_stack_growth (void *addr) {
-	if (!vm_alloc_page(VM_ANON | VM_MARKER_0, pg_round_down(addr), true));
+	vm_alloc_page(VM_ANON | VM_MARKER_0, pg_round_down(addr), true);
 }
 
 /* 쓰기 보호된(write-protected) 페이지에서 난 폴트를 처리한다. */
 static bool
 vm_handle_wp (struct page *page UNUSED) {
+	return false;   /* COW 할 때 구현 */
 }
 
 static uintptr_t
@@ -226,10 +222,10 @@ cur_user_rsp (struct intr_frame *f, bool user) {
 
 static uintptr_t
 lowest_stack_addr (uintptr_t rsp, bool user) {
-  return user ? rsp - 8 : rsp; 
+  return user ? rsp - PUSH_SIZE : rsp;
 }
 
-bool
+static bool
 is_stack_range(void *addr, uintptr_t rsp, bool user) {
   uintptr_t a = (uintptr_t) addr;
   return STACK_LIMIT <= a && a < USER_STACK && a >= lowest_stack_addr(rsp, user);
@@ -237,38 +233,32 @@ is_stack_range(void *addr, uintptr_t rsp, bool user) {
 
 bool
 is_stack (void *addr, uintptr_t rsp, bool user) {
-  uintptr_t a = (uintptr_t) addr;  
-	return STACK_LIMIT <= rsp && rsp <= USER_STACK && is_stack_range(a, rsp, user);
+	return STACK_LIMIT <= rsp && rsp <= USER_STACK && is_stack_range(addr, rsp, user);
 }
+
+static struct page *
+find_page_or_grow (struct intr_frame *f, void *addr, bool user) {
+  struct supplemental_page_table *spt = &thread_current ()->spt;
+  struct page *page = spt_find_page(spt, addr);
+  if (page != NULL)
+    return page;
+	if (!is_stack(addr, cur_user_rsp(f, user), user))
+      return NULL;
+  vm_stack_growth(addr);
+	return spt_find_page(spt, addr);
+}
+
 /* 폴트 유효성 검사에 성공하면 true */
 bool
 vm_try_handle_fault (struct intr_frame *f, void *addr,
 		bool user, bool write, bool not_present) {
-	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
-	struct page *page = NULL;
-	ASSERT(spt);
-
-	if (!is_user_vaddr(addr))
+	if (!is_user_vaddr(addr) || !not_present)
 		return false;
+  
+  struct page *page = find_page_or_grow(f, addr, user);
 
-  if (!not_present)
-    return false;
-
-  void *page_addr = pg_round_down(addr); 
-	page = spt_find_page(spt, page_addr);
-
-  if (page == NULL) {
-    uintptr_t rsp = cur_user_rsp (f, user);
-		if (is_stack(addr, rsp, user)) {
-				vm_stack_growth(addr);
-				page = spt_find_page(spt, page_addr);
-		}
-	} 
-	if (page == NULL)
+  if (page == NULL || (write && !page->writable))
 		return false;
-
-  if (write && !page->writable)
-      return false;
       
   return vm_do_claim_page (page);
 }
@@ -283,7 +273,7 @@ vm_dealloc_page (struct page *page) {
 
 /* VA에 할당된 페이지를 확보(claim)한다. */
 bool
-vm_claim_page (void *va UNUSED) {
+vm_claim_page (void *va) {
 	struct supplemental_page_table *spt = &thread_current()->spt;
 	struct page *page = spt_find_page(spt, va);
 	if (page == NULL) 
@@ -324,7 +314,7 @@ page_less (const struct hash_elem *a_,
 }
 
 void
-supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+supplemental_page_table_init (struct supplemental_page_table *spt) {
 	ASSERT(spt);
 	if (!hash_init(&spt->hash, page_hash, page_less, NULL))
 		PANIC("SPT hash 초기화 실패");
@@ -399,6 +389,6 @@ page_destroy (struct hash_elem *e, void *aux UNUSED) {
 
 /* 보조 페이지 테이블이 가진 자원을 해제한다 */
 void
-supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
+supplemental_page_table_kill (struct supplemental_page_table *spt) {
 	hash_destroy(&spt->hash, page_destroy);
 }
