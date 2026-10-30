@@ -17,7 +17,6 @@ static bool uninit_initialize (struct page *page, void *kva);
 static void uninit_destroy (struct page *page);
 static void uninit_free_resources(void *aux);
 
-
 /* DO NOT MODIFY this struct */
 static const struct page_operations uninit_ops = {
 	.swap_in = uninit_initialize,
@@ -50,18 +49,40 @@ uninit_new (struct page *page, void *va, vm_initializer *init,
 static bool
 uninit_initialize (struct page *page, void *kva) {
 	struct uninit_page *uninit = &page->uninit;
-
 	/* Fetch first, page_initialize may overwrite the values */
 	vm_initializer *init = uninit->init;
 	void *aux = uninit->aux;
-
   bool succ = uninit->page_initializer (page, uninit->type, kva) &&
 		(init ? init (page, aux) : true);
-	
   // 이미 page_initializer로 다른 타입으로 바뀐 후임 -> uninit 접근 불가
   uninit_free_resources(aux);
-
   return succ;
+}
+
+bool
+lazy_load_segment (struct page *page, void *aux) {
+	struct lazy_load_args *args = (struct lazy_load_args *)((struct aux *) aux)->aux_pt;
+  void *kva = page->frame->kva;
+  lock_acquire(&filesys_lock);
+  bool succ = file_read_at (args->file, kva, args->read_bytes, args->ofs) == (off_t)args->read_bytes;
+  lock_release(&filesys_lock);
+  if (succ) memset (kva + args->read_bytes, 0, args->zero_bytes);
+  return succ;
+}
+
+/* fork 복사 공통. 부모 aux 값은 그대로. file만 자식 소유로 바꿔서 새 aux를 만든다. */
+struct aux *
+copy_lazy_load_aux(void * aux, struct file *file){
+  struct aux *src = aux;
+	struct aux *dst = malloc(sizeof *dst);
+	struct lazy_load_args *new_arg = malloc(sizeof *new_arg);
+  if (!new_arg || !dst)
+    PANIC("kernel malloc failed.");  
+	*new_arg = *(struct lazy_load_args *)src->aux_pt;
+	new_arg->file = file;
+	*dst = *src;
+	dst->aux_pt = new_arg;
+	return dst;
 }
 
 /* Free the resources hold by uninit_page. Although most of pages are transmuted
@@ -71,7 +92,6 @@ uninit_initialize (struct page *page, void *kva) {
 static void
 uninit_destroy (struct page *page) {
 	struct uninit_page *uninit = &page->uninit;
-
   uninit_free_resources(uninit->aux);
   uninit->aux = NULL;
 }
@@ -85,7 +105,6 @@ uninit_free_resources(void *aux){
 void
 uninit_free_aux(struct aux *aux){
   if (aux == NULL) return;
-
   ASSERT(aux->aux_pt);
   free(aux->aux_pt);
   free(aux);
