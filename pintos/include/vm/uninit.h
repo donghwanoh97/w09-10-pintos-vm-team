@@ -1,7 +1,7 @@
 #ifndef VM_UNINIT_H
 #define VM_UNINIT_H
 #include "vm/vm.h"
-
+#include "filesys/off_t.h"
 struct page;
 enum vm_type;
 
