@@ -223,7 +223,10 @@ is_addr_user_stack (struct intr_frame *f, void *addr, bool user) {
   uintptr_t rsp = user ? f->rsp : thread_current ()->user_stack_rsp;
   uintptr_t va = (uintptr_t) addr;
 
-  return (va >= USER_STACK - 0x100000 && va < USER_STACK && va >= rsp - 8);
+  /* 커널 모드는 PUSH가 발생하더라도 유저 스택 포인터(rsp)가 영향받지 않음 */
+  uintptr_t rsp_valid = user ? rsp : rsp - 8;
+
+  return (va >= USER_STACK_END && va < USER_STACK && va >= rsp_valid);
 }
 
 /* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
