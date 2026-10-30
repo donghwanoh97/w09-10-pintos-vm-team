@@ -70,6 +70,21 @@ lazy_load_segment (struct page *page, void *aux) {
   return succ;
 }
 
+/* load_segment, do_mmap 공통. 해제는 uninit 몫 */
+struct aux *
+make_lazy_load_aux(struct file *file, off_t ofs, size_t read_bytes, size_t zero_bytes, duplicate_aux dup) {
+	struct aux *aux = malloc(sizeof *aux);
+	struct lazy_load_args *args = malloc(sizeof *args);
+	if (!aux || !args)
+		PANIC("kernel malloc failed");	
+	args->file = file;
+  args->ofs = ofs;
+  args->read_bytes = read_bytes;
+  args->zero_bytes = zero_bytes;  
+	aux->aux_pt = args;
+  aux->duplicate_func = dup; /* fork 때 쓸 복사 함수 */
+	return aux;
+}
 /* fork 복사 공통. 부모 aux 값은 그대로. file만 자식 소유로 바꿔서 새 aux를 만든다. */
 struct aux *
 copy_lazy_load_aux(void * aux, struct file *file){
