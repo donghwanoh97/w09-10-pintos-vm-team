@@ -210,7 +210,7 @@ disconnect_page(struct frame *frame){
 /* 스택을 키운다. */
 static void
 vm_stack_growth (void *va) {
-  vm_alloc_page(VM_ANON, va, true);
+  vm_alloc_page(VM_ANON || VM_MARKER_0, va, true);
 }
 
 /* 쓰기 보호된(write-protected) 페이지에서 난 폴트를 처리한다. */
@@ -219,7 +219,7 @@ vm_handle_wp (struct page *page UNUSED) {
 }
 
 static bool
-is_addr_user_stack (struct intr_frame *f, void *addr, bool user) {
+is_stack_growth (struct intr_frame *f, void *addr, bool user) {
   uintptr_t rsp = user ? f->rsp : thread_current ()->user_stack_rsp;
   uintptr_t va = (uintptr_t) addr;
 
@@ -247,7 +247,7 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 	page = spt_find_page(spt, page_addr);
 
   if (page == NULL) {
-    if (!is_addr_user_stack(f, addr, user)) {
+    if (!is_stack_growth(f, addr, user)) {
       return false;
     }
 
