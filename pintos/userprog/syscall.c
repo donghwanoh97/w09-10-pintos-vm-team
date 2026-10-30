@@ -92,7 +92,6 @@ syscall_init (void) {
  */
 void sys_exit (int status) {
 	struct thread *cur = thread_current ();
-
 	/* 종료 기록 할당에 실패해도 부모에게 전달할 상태는 보존함. */
 	if (cur->self_info != NULL)
 		cur->self_info->exit_status = status;
@@ -100,7 +99,6 @@ void sys_exit (int status) {
 		cur->exit_info = malloc (sizeof *cur->exit_info);
 	if (cur->exit_info != NULL)
 		cur->exit_info->status = status;
-
 	thread_exit ();
 }
 
@@ -126,8 +124,7 @@ void check_address(const void *addr) {
 	if (addr == NULL || !is_user_vaddr(addr)) {
 		sys_exit(-1);
 	}
-	/* SPT에 없어도 스택 성장 대상이면 통과. 커널이 쓰다 fault 나면 핸들러가 키움.
-	 * 시스템 콜 안이라 커널 기준(user=false): user_rsp를 넘기고 rsp 위만 허용 */
+	/* SPT에 없어도 스택 성장 대상이면 통과 */
 	if ((spt_find_page(&thread_current()->spt, (void *) addr) == NULL) 
 	&& (!is_stack((void *) addr, thread_current()->user_rsp, false))) {
 		sys_exit(-1);
@@ -160,7 +157,6 @@ static void check_buffer(const void *buf, size_t size, bool check_buf_writable) 
 	for (const char *p = (const char *)pg_round_down(buf); p <= end; p += PGSIZE) {
 		check_address(p);
 		if (check_buf_writable) {
-			
 			struct page *page = spt_find_page(&thread_current()->spt, (void*) p);
 			if (page != NULL && !page->writable) {
 				sys_exit(-1);
@@ -240,7 +236,6 @@ void fd_table_create(void) {
  */
 static struct file *fd_get(int fd) {
 	struct file **table = thread_current()->fd_table;
-
 	if (table == NULL || fd < 2 || fd >= (int)FD_MAX) {
 		return NULL;
 	}
@@ -290,12 +285,10 @@ int fd_add(struct file *file) {
  */
 void fd_close(int fd) {
 	struct file *file = fd_get(fd);
-
 	if (file == NULL) {
 		return;
 	}
 	thread_current()->fd_table[fd] = NULL;
-
 	lock_acquire(&filesys_lock);
 	file_close(file);
 	lock_release(&filesys_lock);
@@ -315,7 +308,6 @@ void fd_close(int fd) {
  */
 void fd_table_close_all(void) {
 	struct thread *cur = thread_current();
-
 	if (cur->fd_table == NULL) {
 		return;
 	}
@@ -366,16 +358,12 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_EXIT: {		/* exit(status) 첫 인자는 rdi로 전달 */
 			int status = (int)f->R.rdi;
 			struct thread *cur = thread_current();
-
 			struct exit_info *record = malloc(sizeof(struct exit_info));		/* 종료 상태 저장할 실제 메모리 공간 할당 */
 			if (record == NULL) {		/* 할당 실패하면 기록에 접근하지 않고 현재 스레드 종료 */
 				thread_exit();
 			}
-			
 			record->status = status;		// 구조체 안에 종료 상태 저장
-
 			cur->exit_info = record;		// process_exit()에서도 같은 기록 찾을 수 있도록 현재 스레드에 구조체 주소 저장
-
 			thread_exit();		/* 내부에서 process_exit() 호출해 자원 정리하고 현재 스레드 종료 */
 		}
 		case SYS_FORK:
@@ -389,7 +377,6 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				sys_exit(-1);
 			}
 			strlcpy(k, f->R.rdi, len);
-			
 			f->R.rax = process_exec(k);
 			sys_exit(-1);
 			break;
@@ -399,58 +386,45 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_CREATE: {
 			const char *create_file_name = (const char *)f->R.rdi;
 			unsigned initial_size = (unsigned)f->R.rsi;
-
 			check_address(create_file_name);
-
 			char kname[NAME_BUF];
 			if (!copy_name(kname, create_file_name, sizeof kname)) {	// 너무 긴 이름은 실패
 				f->R.rax = false;
 				break;
 			}
-
 			lock_acquire(&filesys_lock);
 			f->R.rax = filesys_create(kname, initial_size);
 			lock_release(&filesys_lock);
-
 			break;
 		}
 		case SYS_REMOVE: {
 			const char *remove_file_name = (const char *)f->R.rdi;
-
 			check_address(remove_file_name);
-
 			char kname[NAME_BUF];
 			if (!copy_name(kname, remove_file_name, sizeof kname)) {
 				f->R.rax = false;
 				break;
 			}
-
 			lock_acquire(&filesys_lock);
 			f->R.rax = filesys_remove(kname);
 			lock_release(&filesys_lock);
-
 			break;
 		}
 		case SYS_OPEN: {
 			const char *open_file_name = (const char *)f->R.rdi;
-
 			check_address(open_file_name);
-
 			char kname[NAME_BUF];
 			if (!copy_name(kname, open_file_name, sizeof kname)) {
 				f->R.rax = -1;
 				break;
 			}
-
 			lock_acquire(&filesys_lock);
 			struct file *file = filesys_open(kname);
 			lock_release(&filesys_lock);
-
 			if (file == NULL) {	// 없는 파일이거나 빈 이름이면 실패(-1)
 				f->R.rax = -1;
 				break;
 			}
-
 			int new_fd = fd_add(file);
 			if (new_fd == -1) {	// fd 테이블이 꽉 차면 열어 둔 파일을 닫고 실패
 				lock_acquire(&filesys_lock);
@@ -458,30 +432,24 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				lock_release(&filesys_lock);
 			}
 			f->R.rax = new_fd;
-
 			break;
 		}
 		case SYS_FILESIZE: {
 			struct file *file = fd_get(fd); // 실제 파일 조회는 이후 open 구현 후 fd 관리 코드와 연결
-
 			if (file == NULL) {	// fd에 연결된 파일 없으면 실패(-1) 반환
 				f->R.rax = -1;
 				break;
 			}
-
 			// 지금은 길이가 안 바뀌어 락 없이도 안전하지만, 락 규칙을 예외 없이 지키고 파일 확장(프로젝트 4)에 대비해 잡음
 			lock_acquire(&filesys_lock);
 			f->R.rax = file_length(file);
 			lock_release(&filesys_lock);
-
 			break;
 		}
 		case SYS_READ: {
 			void * buffer = (void *)f->R.rsi;
 			unsigned size = (unsigned)f->R.rdx;
-
 			check_buffer(buffer, size, true);
-
 			if (fd == 0) {
 				uint8_t *buf = buffer;
 				for (unsigned i = 0; i < size; i++) {
@@ -498,18 +466,15 @@ syscall_handler (struct intr_frame *f UNUSED) {
 					f->R.rax = -1;
 					break;
 				}
-
 				// 락 안에서는 커널 버퍼에만 읽고, 유저 버퍼로의 복사는 락 밖에서 함
 				// 단점: 청크마다 락을 다시 잡고, 시작 위치가 섹터 경계가 아니면 경계 섹터를 두 번 읽음
 				char kbuf[IO_CHUNK];
 				unsigned done = 0;
 				while (done < size) {
 					unsigned n = size - done < sizeof kbuf ? size - done : sizeof kbuf;
-
 					lock_acquire(&filesys_lock);
 					int got = file_read(fd_file, kbuf, n);
 					lock_release(&filesys_lock);
-
 					if (got <= 0) {
 						break;
 					}
@@ -521,15 +486,12 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				}
 				f->R.rax = done; // 실제로 읽은 바이트 수 반환
 			}
-
 			break;
 		}
 		case SYS_WRITE: {
 			const void *buffer = (const void *)f->R.rsi;
 			unsigned size = (unsigned)f->R.rdx;
-
 			check_buffer(buffer, size, false);
-
 			if (fd == 1) {
 				putbuf(buffer, size);
 				f->R.rax = size;
@@ -546,11 +508,9 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				while (done < size) {
 					unsigned n = size - done < sizeof kbuf ? size - done : sizeof kbuf;
 					memcpy(kbuf, (const char *)buffer + done, n);
-
 					lock_acquire(&filesys_lock);
 					int put = file_write(fd_file, kbuf, n);
 					lock_release(&filesys_lock);
-
 					done += put;
 					if (put < (int)n) {	// 파일 끝이거나 쓰기가 막혀 더 못 씀
 						break;
@@ -563,7 +523,6 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_SEEK: {
 			unsigned position = (unsigned)f->R.rsi;
 			struct file *file = fd_get(fd);
-
 			if (file == NULL) {	// 잘못된 fd면 아무것도 안 함
 				break;
 			}
@@ -571,21 +530,17 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			if (position > INT32_MAX) {	
 				break;
 			}
-
 			lock_acquire(&filesys_lock);
 			file_seek(file, position);
 			lock_release(&filesys_lock);
-
 			break;
 		}
 		case SYS_TELL: {
 			struct file *file = fd_get(fd);
-
 			if (file == NULL) {
 				f->R.rax = -1;
 				break;
 			}
-
 			lock_acquire(&filesys_lock);
 			f->R.rax = file_tell(file);
 			lock_release(&filesys_lock);

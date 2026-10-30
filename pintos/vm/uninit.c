@@ -11,6 +11,7 @@
 #include "userprog/process.h"
 #include "vm/vm.h"
 #include "vm/uninit.h"
+#include "userprog/syscall.h"
 
 static bool uninit_initialize (struct page *page, void *kva);
 static void uninit_destroy (struct page *page);

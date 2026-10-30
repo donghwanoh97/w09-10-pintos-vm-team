@@ -1110,21 +1110,35 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	return true;
 }
 
-static void *
-duplicate_lazy_load_arg(void * aux){
+static aux *
+copy_lazy_load_aux(void * aux, struct file *file){
   struct aux *src = (struct aux *)aux;
 	struct aux *dst = malloc(sizeof(struct aux));
 	struct lazy_load_args *old_arg = (struct lazy_load_args *)src->aux_pt;
 	struct lazy_load_args *new_arg = malloc(sizeof(struct lazy_load_args));
   if (!new_arg || !dst)
     PANIC("kernel malloc failed.");
-  dst->aux_pt = new_arg;
   new_arg->ofs = old_arg->ofs;
   new_arg->read_bytes = old_arg->read_bytes;
   new_arg->zero_bytes = old_arg->zero_bytes;
-  new_arg->file = thread_current()->using_file;
+  new_arg->file = file;
+	dst->aux_pt = new_arg;
 	dst->dulicate_func = src->duplicate_func;
   return (void *)dst;
+}
+
+static void *
+duplicate_lazy_load_arg(void *aux) {
+	return copy_lazy_load_aux(aux, thread_current()->using_file);
+}
+
+static void *
+duplicate_mmap_arg(void *aux) {
+	struct lazy_load_args *old_arg = ((struct aux *) aux)->aux_pt;
+	lock_require(&filesys_lock);
+	struct file *file = file_reopen(old_arg->file);
+	lock_release(&filesys_lock);
+	return copy_lazy_load_aux(aux, file);
 }
 
 /* 페이지를 예약하고 바로 frame을 붙임 - lazy 하지 않음 */

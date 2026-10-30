@@ -30,10 +30,8 @@ bool
 anon_initializer (struct page *page, enum vm_type type, void *kva) {
 	/* Set up the handler */
 	page->operations = &anon_ops;
-
 	struct anon_page *anon_page = &page->anon;
   anon_page->is_stack = IS_STACK(type);
-
   return true;
 }
 
@@ -53,7 +51,6 @@ anon_swap_out (struct page *page) {
 static void
 anon_destroy (struct page *page) {
 	struct anon_page *anon_page = &page->anon;
-
   if (page->frame){ 
     vm_remove_frame(page->frame, thread_current()->pml4);
   }

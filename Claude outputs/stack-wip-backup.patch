@@ -1,0 +1,165 @@
+diff --git a/pintos/include/vm/vm.h b/pintos/include/vm/vm.h
+index 33356eb..4569ca0 100644
+--- a/pintos/include/vm/vm.h
++++ b/pintos/include/vm/vm.h
+@@ -36,7 +36,7 @@ struct thread;
+ 
+ /* type에서 하위 3비트(페이지 종류)만 뽑아낸다 */
+ #define VM_TYPE(type) ((type) & 7)
+-
++#define STACK_MAX (1<<20)
+ /* "페이지"를 나타내는 구조체.
+  * 일종의 "부모 클래스"이고, 자식 클래스가 네 개 있다:
+  * uninit_page, file_page, anon_page, page cache(Project 4).
+diff --git a/pintos/tests/vm/pt-grow-stk-sc.c b/pintos/tests/vm/pt-grow-stk-sc.c
+index 3efbb5f..8e8de3f 100644
+--- a/pintos/tests/vm/pt-grow-stk-sc.c
++++ b/pintos/tests/vm/pt-grow-stk-sc.c
+@@ -26,7 +26,6 @@ test_main (void)
+   /* Read back via read(). */
+   CHECK ((handle = open ("sample.txt")) > 1, "2nd open \"sample.txt\"");
+   CHECK (read (handle, buf2 + 32768, slen) == slen, "read \"sample.txt\"");
+-
+   CHECK (!memcmp (sample, buf2 + 32768, slen), "compare written data against read data");
+   close (handle);
+ }
+diff --git a/pintos/userprog/syscall.c b/pintos/userprog/syscall.c
+index 606f287..0ab7051 100644
+--- a/pintos/userprog/syscall.c
++++ b/pintos/userprog/syscall.c
+@@ -21,7 +21,7 @@ void syscall_entry (void);
+ void syscall_handler (struct intr_frame *);
+ 
+ 
+-void check_address (const void *addr); 
++void check_address (struct intr_frame *f, const void *addr, void user); 
+ 
+ /* 시스템 콜(System call).
+  *
+@@ -121,8 +121,16 @@ void sys_exit (int status) {
+  * @note 이 주소가 속한 한 페이지만 봄. 여러 페이지에 걸친 버퍼는 check_buffer(),
+  *       문자열은 copy_name()을 씀
+  */
+-void check_address(const void *addr) {
+-	if (addr == NULL || !is_user_vaddr(addr) || spt_find_page(&thread_current()->spt, addr) == NULL) {
++void check_address(struct intr_frame *f, const void *addr, bool user) {
++	printf ("[dbg] check_address %p\n", addr);
++	if (addr == NULL || !is_user_vaddr(addr)) {
++		printf ("[dbg]   -> exit: null/kernel\n");
++		sys_exit(-1);
++	}
++	if ((spt_find_page(&thread_current()->spt, (void *) addr) == NULL) 
++	&& (!is_stack(f, addr, user))) {
++		printf ("[dbg]   -> exit: not in spt (user_rsp=%#lx)\n",
++		        (unsigned long) thread_current()->user_rsp);
+ 		sys_exit(-1);
+ 	}
+ }
+@@ -144,14 +152,14 @@ void check_address(const void *addr) {
+  * 임시: 포인터 검증 함수가 나오면 그 호출로 바꿀 것.
+  * check_address()가 pml4_get_page()를 쓰므로 프로젝트 3의 lazy 페이지에는 맞지 않음.
+  */
+-static void check_buffer(const void *buf, size_t size) {
+-	check_address(buf);
++static void check_buffer(struct intr_frame *f, const void *buf, size_t size) {
++	check_address(f, buf);
+ 	if (size == 0) {
+ 		return;
+ 	}
+ 	const char *end = (const char *)buf + size - 1;
+ 	for (const char *p = (const char *)pg_round_down(buf) + PGSIZE; p <= end; p += PGSIZE) {
+-		check_address(p);
++		check_address(f, p);
+ 	}
+ }
+ 
+@@ -178,10 +186,10 @@ static void check_buffer(const void *buf, size_t size) {
+  * 첫 페이지는 호출한 쪽의 check_address()가 검사하고, 여기서는 새 페이지에 들어설 때마다 검사함.
+  * 임시: 문자열 검증 함수가 나오면 바꿀 것.
+  */
+-static bool copy_name(char *kdst, const char *usrc, size_t max) {
++static bool copy_name(struct intr_frame *f, char *kdst, const char *usrc, size_t max, bool user) {
+ 	for (size_t i = 0; i < max; i++) {
+ 		if (i > 0 && pg_ofs(usrc + i) == 0) {
+-			check_address(usrc + i);
++			check_address(f, usrc + i, user);
+ 		}
+ 		kdst[i] = usrc[i];
+ 		if (kdst[i] == '\0') {
+diff --git a/pintos/vm/vm.c b/pintos/vm/vm.c
+index 324f83e..908e52d 100644
+--- a/pintos/vm/vm.c
++++ b/pintos/vm/vm.c
+@@ -9,7 +9,7 @@
+ #include "lib/kernel/hash.h"
+ #include "include/threads/vaddr.h"
+ #include "include/threads/thread.h"
+-
++#include "include/vm/vm.h"
+ /* 각 하위 시스템의 초기화 코드를 불러서
+  * 가상 메모리 하위 시스템을 초기화한다. */
+ void
+@@ -210,6 +210,7 @@ disconnect_page(struct frame *frame){
+ /* 스택을 키운다. */
+ static void
+ vm_stack_growth (void *addr UNUSED) {
++	vm_alloc_page(VM_ANON | VM_MARKER_0, pg_round_down(addr), true);
+ }
+ 
+ /* 쓰기 보호된(write-protected) 페이지에서 난 폴트를 처리한다. */
+@@ -217,6 +218,14 @@ static bool
+ vm_handle_wp (struct page *page UNUSED) {
+ }
+ 
++bool
++is_stack (struct intr_frame *f, void *addr, bool user) {
++	uintptr_t rsp = user ? f->rsp : thread_current()->user_rsp;
++	uintptr_t a = (uintptr_t) addr;
++	if (!USER_STACK - STACK_MAX <= a && a < USER_STACK && a >= rsp - 8)
++		return false;
++	return true;
++}
+ /* Anonymous Page의 Lazy Loading, Stack Growth까지 해야 최종 구현 가능. 폴트 유효성 검사에 성공하면 true를 돌려준다. */
+ bool
+ vm_try_handle_fault (struct intr_frame *f, void *addr,
+@@ -224,23 +233,29 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
+ 	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
+ 	struct page *page = NULL;
+ 	ASSERT(spt);
+-	
+-	if (!is_user_vaddr(addr))
+-		return false;
++	printf ("[dbg] fault addr=%p user=%d write=%d np=%d rsp=%#lx\n",
++	        addr, user, write, not_present, (unsigned long) rsp);
+ 
+-  if (!not_present)
+-		return false;
++	if (!is_user_vaddr(addr)) { printf ("[dbg]   -> fail: kernel addr\n"); return false;}
++  if (!not_present) { printf("[dbg] fault false: !np addr=%p\n", addr); return false; }
+ 
+   void *page_addr = pg_round_down(addr); 
+ 	page = spt_find_page(spt, page_addr);
+ 
+-  if (page == NULL)   
+-    return false;
+-
+-  if (write && !page->writable)
++  if (page == NULL) {
++		if (is_stack(f, addr, user)) {
++				vm_stack_growth(addr);
++				page = spt_find_page(spt, page_addr);
++		}
++	} 
++	if (page == NULL) { printf("[dbg] fault false: no page addr=%p\n", addr); return false; }
++  if (write && !page->writable) {
++		printf ("[dbg]   -> fail: read-only\n");
+ 		return false;
+-
+-  return vm_do_claim_page (page);
++	}
++	bool r =vm_do_claim_page (page);
++  printf("[dbg] fault ok addr=%p\n", addr);   /* claim 성공 직후 */
++	return r;
+ }
+ 
+ /* 페이지를 해제한다.

@@ -129,29 +129,22 @@ page_fault (struct intr_frame *f) {
 	bool write;        /* True: 쓰기 접근, false: 읽기 접근. */
 	bool user;         /* True: 유저의 접근, false: 커널의 접근. */
 	void *fault_addr;  /* 폴트 주소. */
-
 	/* 폴트가 난 주소, 즉 폴트를 일으킨 접근 대상 가상 주소를 가져옴.
 	   코드를 가리킬 수도, 데이터를 가리킬 수도 있음.  폴트를 일으킨
 	   명령어의 주소와 반드시 같지는 않음 (그건 f->rip임). */
-
 	fault_addr = (void *) rcr2();
-
 	/* 인터럽트를 다시 켬 (CR2가 바뀌기 전에 확실히 읽으려고
 	   잠시 꺼 둔 것뿐이었음). */
 	intr_enable ();
-
-
 	/* 원인을 판별함. */
 	not_present = (f->error_code & PF_P) == 0;
 	write = (f->error_code & PF_W) != 0;
 	user = (f->error_code & PF_U) != 0;
-
 #ifdef VM
 	/* project 3 이후용. */
 	if (vm_try_handle_fault (f, fault_addr, user, write, not_present))
 		return;
 #endif
-
 	/* 페이지 폴트 횟수를 셈. */
 	page_fault_cnt++;
 	if(user){

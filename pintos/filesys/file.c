@@ -11,7 +11,7 @@ struct file {
 };
 
 /* 주어진 INODE에 대한 파일을 열고, INODE의 소유권을 넘겨받아
- * 새 파일을 반환함.  할당(allocation)에 실패하거나 INODE가
+ * 새 파일을 반환함. 할당(allocation)에 실패하거나 INODE가
  * 널 포인터(null pointer)이면 널 포인터를 반환함. */
 struct file *
 file_open (struct inode *inode) {
