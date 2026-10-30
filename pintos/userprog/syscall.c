@@ -129,7 +129,7 @@ void check_address(const void *addr) {
 	/* SPT에 없어도 스택 성장 대상이면 통과. 커널이 쓰다 fault 나면 핸들러가 키움.
 	 * 시스템 콜 안이라 user=false → is_stack이 f 대신 user_rsp를 씀 */
 	if ((spt_find_page(&thread_current()->spt, (void *) addr) == NULL) 
-	&& (!is_stack(NULL, (void *) addr, false))) {
+	&& (!is_stack((void *) addr, &thread_current()->spt, false))) {
 		sys_exit(-1);
 	}
 }
