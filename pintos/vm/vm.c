@@ -212,8 +212,7 @@ disconnect_page(struct frame *frame){
 /* 스택을 키운다. */
 static void
 vm_stack_growth (void *addr) {
-  if (!vm_alloc_page(VM_ANON | VM_MARKER_0, addr, true))
-    PANIC("page allocation failed.");
+  vm_alloc_page(VM_ANON | VM_MARKER_0, addr, true);
 }
 
 /* 쓰기 보호된(write-protected) 페이지에서 난 폴트를 처리한다. */
@@ -246,12 +245,10 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 	page = spt_find_page(spt, page_addr);
 
   if (page == NULL){
-    if (is_stack_growth(f, user, addr)){
+    if (is_stack_growth(f, user, addr)) 
       page = spt_find_page(spt, page_addr);
-    }
-    else{
+    else
       return false;
-    }
   }   
 
   if (write && !page->writable)
@@ -270,8 +267,12 @@ is_stack_growth(struct intr_frame *f, bool user, void *addr){
 
   struct supplemental_page_table *spt = &thread_current()->spt;
   void *stack_page = pg_round_down(rsp);
+  
   while(spt_find_page(spt, stack_page) == NULL){
     vm_stack_growth(stack_page);
+    
+    if (!spt_find_page(spt, stack_page))
+      return false;
 
     stack_page += PGSIZE;
   }
