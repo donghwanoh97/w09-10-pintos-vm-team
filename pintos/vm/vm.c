@@ -210,7 +210,7 @@ disconnect_page(struct frame *frame){
 /* 스택을 키운다. */
 static void
 vm_stack_growth (void *va) {
-  vm_alloc_page(VM_ANON || VM_MARKER_0, va, true);
+  vm_alloc_page(VM_ANON | VM_MARKER_0, va, true);
 }
 
 /* 쓰기 보호된(write-protected) 페이지에서 난 폴트를 처리한다. */
