@@ -82,13 +82,4 @@ struct lazy_load_args {
   uint32_t zero_bytes;
 };
 
-struct mmap_args {
-  struct file *file;
-  off_t ofs;
-  uint32_t read_bytes;
-  uint32_t zero_bytes;
-  void *mmap_start_addr;
-};
-
-
 #endif /* userprog/process.h */

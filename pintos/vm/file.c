@@ -4,6 +4,7 @@
 #include "threads/vaddr.h"
 #include "include/userprog/process.h"
 #include "lib/round.h"   
+#include "include/userprog/syscall.h"
 
 static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
@@ -50,7 +51,7 @@ file_backed_destroy (struct page *page) {
 	struct file_page *file_page UNUSED = &page->file;
 }
 
-static void init_mmap_args (struct mmap_args *args, struct file *file, off_t offset, uint32_t read_bytes, uint32_t zero_bytes, void* start_addr) {
+static void init_file_args (struct file_args *args, struct file *file, off_t offset, uint32_t read_bytes, uint32_t zero_bytes, void* start_addr) {
 	args->file = file;
 	args->ofs = offset;
 	args->read_bytes = read_bytes;
@@ -58,8 +59,30 @@ static void init_mmap_args (struct mmap_args *args, struct file *file, off_t off
 	args->mmap_start_addr = start_addr;
 }
 
+static void init_file_page(struct page *page, struct file_args *args) {
+	page->file.file = args->file;	
+	page->file.ofs = args->ofs;
+	page->file.read_bytes = args->read_bytes;
+	page->file.zero_bytes = args->zero_bytes;
+	page->file.mmap_start_addr = args->mmap_start_addr;
+}
+
 static bool
 lazy_load_file (struct page *page, void *aux) {
+	struct file_args *args = (struct file_args *)((struct aux *) aux)->aux_pt;
+  void *kva = page->frame->kva;
+
+  lock_acquire(&filesys_lock);
+  bool succ = file_read_at (args->file, kva, args->read_bytes, args->ofs) == (int)args->read_bytes;
+  lock_release(&filesys_lock);
+
+  if (succ) memset (kva + args->read_bytes, 0, args->zero_bytes);
+
+	init_file_page(page, args);
+
+	uninit_free_aux((struct aux *) aux);
+
+  return succ;
 }
 
 static bool spt_remove_successive_pages(struct supplemental_page_table *spt, void *start, void* end) {
@@ -67,6 +90,7 @@ static bool spt_remove_successive_pages(struct supplemental_page_table *spt, voi
 	while (curr < end) {
 		struct page *page = spt_find_page(spt, curr);
 		if (!page) {
+			curr += PGSIZE;
 			continue;
 		}
 		spt_remove_page(spt, page);
@@ -74,6 +98,10 @@ static bool spt_remove_successive_pages(struct supplemental_page_table *spt, voi
 		curr += PGSIZE;
 	}
 	return true;
+}
+
+static void *duplicate_file_arg(void * aux) {
+	// todo
 }
 
 /* Do the mmap */
@@ -98,17 +126,26 @@ do_mmap (void *addr, size_t length, int writable, struct file *file, off_t offse
 		uint32_t read_bytes = (page_len < file_left) ? page_len : file_left; 
 		uint32_t zero_bytes = PGSIZE - read_bytes;
 	
-		struct mmap_args *args = malloc(sizeof (struct mmap_args));
-		if (!args) {
-			PANIC("mmap_args malloc");
-		}
-		init_mmap_args(args, file, offset, read_bytes, zero_bytes, addr);
+
+		/* TODO: lazy_load_segment에 정보를 넘기기 위해 aux를 설정할 것. */
+    struct aux *aux = malloc(sizeof(struct aux));
+    if (!aux)
+      PANIC("kernal malloc failed.");
+
+    struct file_args *args = malloc(sizeof (struct file_args));
+    if (!args)
+      PANIC("kernal malloc failed.");
+
+		init_file_args(args, file, offset, read_bytes, zero_bytes, addr);
+
+    aux->aux_pt = args;
+    aux->duplicate_func = duplicate_file_arg;
 
 		if (spt_find_page(spt, curr_page) == NULL) {
-			bool is_page_allocated = vm_alloc_page_with_initializer(VM_FILE, curr_page, writable, lazy_load_file, args);
+			bool is_page_allocated = vm_alloc_page_with_initializer(VM_FILE, curr_page, writable, lazy_load_file, aux);
 
 			if (!is_page_allocated) {
-				free(args);
+				uninit_free_aux(aux);
 				
 				// spt에 등록했던 페이지 해제
 				spt_remove_successive_pages(spt, addr, curr_page);
