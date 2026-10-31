@@ -38,7 +38,7 @@ file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 
 /* page->file 정보로 파일 내용을 kva에 읽고, 나머지는 0으로 채운다. (swap_in에서 사용) */
 static bool
-read_page_from_file (struct page *page, void *kva) {
+fill_frame_from_file (struct page *page, void *kva) {
 	struct file_page *info = &page->file;
   lock_acquire(&filesys_lock);
   bool succ = file_read_at (info->backing_file, kva, info->read_bytes, info->offset) == (off_t)info->read_bytes;
@@ -51,7 +51,7 @@ read_page_from_file (struct page *page, void *kva) {
 /* 내보냈던 페이지를 다시 불러 온다 */
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
-	return read_page_from_file(page, kva);
+	return fill_frame_from_file(page, kva);
 }
 
 /* 메모리가 부족할 때 페이지를 잠시 내보낸다.
