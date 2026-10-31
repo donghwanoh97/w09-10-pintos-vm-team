@@ -112,23 +112,36 @@ do_mmap (void *addr, size_t length, int writable, struct file *fd_file, off_t of
 	return start;
 }
 
+static void
+write_back_if_dirty (struct page *page) {
+	struct file_page *info = &page->file;
+	struct thread *cur = thread_current();
+	if (pml4_is_dirty (cur->pml4, page->va)) {
+			lock_acquire(&filesys_lock);
+			file_write_at(info->backing_file, page->frame->kva, info->read_bytes, info->offset);
+			lock_release(&filesys_lock);
+	}
+}
+
+static void
+open_backing_file (struct page *page) {
+	struct file_page *info = &page->file;
+	lock_acquire(&filesys_lock);
+	file_close(info->backing_file);
+	lock_release(&filesys_lock);
+}
+
 /* Destroy the file backed page. PAGE will be freed by the caller. */
 static void
 file_backed_destroy (struct page *page) {
 	struct file_page *info = &page->file;
 	struct thread *cur = thread_current();
 	if (page->frame != NULL) {
-		if (pml4_is_dirty (cur->pml4, page->va)) {
-			lock_acquire(&filesys_lock);
-			file_write_at(info->backing_file, page->frame->kva, info->read_bytes, info->offset);
-			lock_release(&filesys_lock);		
-		}
+		write_back_if_dirty(page);
 		release_frame(page->frame, cur->pml4);
+	open_backing_file(page);
 	}
-	lock_acquire(&filesys_lock);
-	file_close(info->backing_file);
-	lock_release(&filesys_lock);
-	}
+}
 
 static bool
 is_file_backed_page(struct page *page) {
