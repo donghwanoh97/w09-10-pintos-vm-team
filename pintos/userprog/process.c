@@ -835,7 +835,6 @@ done:
 	return success;
 }
 
-
 /* PHDR이 FILE 안의 유효하고 로드 가능한 세그먼트를 기술하는지
  * 확인하여, 그렇다면 true를, 아니면 false를 반환함. */
 static bool
@@ -1014,6 +1013,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	return true;
 }
 
+/* 실행 페이지의 aux 사본 (fork시 자식용) */
 static void *
 duplicate_lazy_load_arg(void *aux) { 
 	return copy_lazy_load_aux(aux, thread_current()->using_file);
@@ -1023,7 +1023,7 @@ duplicate_lazy_load_arg(void *aux) {
 static bool
 setup_stack (struct intr_frame *if_) {
 	void *first_stack_page = (void *) (USER_STACK - PGSIZE);
-
+	/* VM_MARKER_0: 스택 페이지 표시 (stack growth 판단 등에 사용) */
   if (!vm_alloc_and_claim(VM_ANON | VM_MARKER_0, first_stack_page, true))
     return false;
 

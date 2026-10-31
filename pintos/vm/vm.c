@@ -117,7 +117,7 @@ spt_find_page (struct supplemental_page_table *spt, void *va) {
   return page;
 }
 
-/* 검증을 거쳐 PAGE를 spt에 넣는다. 주소 유효성 검증은 vm_try_handle_fault에서 처리하는 것으로 구현 */
+/* 검증을 거쳐 PAGE를 spt에 넣는다. */
 bool
 spt_insert_page (struct supplemental_page_table *spt, struct page *page) {
 	int succ = false;
@@ -127,6 +127,7 @@ spt_insert_page (struct supplemental_page_table *spt, struct page *page) {
   return succ;
 }
 
+/* SPT 해시에서 page->va에 해당하는 페이지를 제거한다. */
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	ASSERT(spt && page);
@@ -172,6 +173,7 @@ vm_get_frame (void) {
 	return frame;
 }
 
+/* pml4에서 page->va의 PTE를 지운다. */
 static void
 remove_pte_from_pml4(struct frame *frame, uint64_t *pml4){
   struct page *page = frame->page;
@@ -181,6 +183,7 @@ remove_pte_from_pml4(struct frame *frame, uint64_t *pml4){
   }
 }
 
+/* page와 frame 연결을 해제한다. */
 static void
 unlink_page_and_frame(struct frame *frame){
   struct page *page = frame->page;
@@ -190,18 +193,23 @@ unlink_page_and_frame(struct frame *frame){
   }
 }
 
+/* frame->kva(물리 메모리)와 frame 구조체를 반납한다. */
 static void
 free_frame (struct frame *frame) {
   palloc_free_page (frame->kva);
   free(frame);
 }
 
+/* 1) pml4에서 page->va의 PTE를 지우고, 
+2) page와 frame의 연결을 해제, 
+3) frame->kva(물리 메모리)와 frame 구조체를 반납한다. */
 void 
 release_frame(struct frame *frame, uint64_t *pml4){
   ASSERT(frame);
   ASSERT(frame->page);
   remove_pte_from_pml4(frame, pml4); 
   unlink_page_and_frame(frame);
+  // frame_table 지우기
   free_frame(frame);
 }
 
@@ -346,20 +354,23 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
   return true;
 }
 
+/* aux의 사본을 만든다. aux 만들 때 등록한 duplicate_func에 따라서 */
 static struct aux *copy_aux(struct aux *aux){
   if (aux == NULL) return NULL;
   ASSERT(aux->duplicate_func);
   return aux->duplicate_func(aux);
 }
 
+/* uninit페이지 타입 fork (부모페이지->자식페이지)*/
 static bool
 try_copy_uninit(struct page *page){
   struct uninit_page *uninit = &page->uninit;
   struct aux * aux = uninit->aux;      
   struct aux * new_aux = copy_aux(aux);
-  return vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux) && vm_claim_page(page->va);
+  return vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux);
 }
 
+/* anon페이지 타입 fork (부모페이지->자식페이지)*/
 static bool
 try_copy_anon(struct page *page){
   if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable))     
@@ -369,6 +380,7 @@ try_copy_anon(struct page *page){
   return true;
 }
 
+/* file 페이지 타입 fork(부모페이지->자식페이지) */
 static bool
 try_copy_file(struct page *page){
   return vm_alloc_and_claim (page->operations->type, page->va, page->writable);

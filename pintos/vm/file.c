@@ -50,6 +50,7 @@ file_backed_swap_out (struct page *page) {
 	return true;
 }
 
+/* aux(lazy load 인자)에 담긴 파일 정보를 page->file로 옮긴다 */
 static void
 save_file_into_page (struct page *page, void *aux) {
 	struct lazy_load_args *args = ((struct aux *) aux)->aux_pt;
@@ -57,29 +58,36 @@ save_file_into_page (struct page *page, void *aux) {
   page->file.offset = args-> ofs;
   page->file.read_bytes = args-> read_bytes;
 }
+
+/* 첫 page fault 시: 파일 정보를 page에 저장하고, 파일 내용을 프레임에 읽어 온다 */
 static bool
 lazy_load_mmap (struct page *page, void *aux) {
 	save_file_into_page(page,aux);
   return lazy_load_segment(page, aux);
 }
 
+/* src_file을 가리키는 열린 파일(file)을 하나 더 만든다. 
+inode(디스크 실제 파일)은 공유된다 */
 static struct file *
-open_backing_file (struct file *file) {
+make_backing_file (struct file *src_file) {
 	lock_acquire(&filesys_lock);
-	struct file *backing_file = file_reopen(file);
+	struct file *backing_file = file_reopen(src_file);
 	lock_release(&filesys_lock);
 	return backing_file;
 }
 
+/* mmap aux의 사본을 만든다 (fork 시 자식용). backing_file은 새로 연다 */
 static void *
-duplicate_mmap_arg(struct page *page, void *aux) {
-	struct lazy_load_args *old_arg = ((struct aux *) aux)->aux_pt;
-	struct file *backing_file = open_backing_file(old_arg->file);	
+duplicate_mmap_arg(void *aux) {
+	struct lazy_load_args *old_arg = ((struct aux *)aux)->aux_pt;
+	struct file *backing_file = make_backing_file(old_arg->file);	
 	if (backing_file == NULL)
 		return NULL;
 	return copy_lazy_load_aux(aux, backing_file);
 }
 
+/* mmap 인자가 유효한지 검사한다.
+   주소·offset 정렬, 사용자 영역 여부, 파일 길이, 기존 페이지와의 겹침을 확인한다. */
 static bool
 is_valid_mmap (void *addr, size_t length, struct file *fd_file, off_t offset) {
 	if (addr == NULL || pg_ofs (addr) != 0 || length == 0 || offset % PGSIZE != 0
@@ -91,64 +99,64 @@ is_valid_mmap (void *addr, size_t length, struct file *fd_file, off_t offset) {
 	if (flen == 0)
 		return false;
 	for (size_t i = 0; i < length; i += PGSIZE)
-		/* 이미 페이지가 있으면 안됨 */
+		/* mmap을 수행하려면, 이미 SPT에 페이지가 등록되어 있으면 안됨 */
 		if (spt_find_page (&thread_current ()->spt, addr + i) != NULL)
 			return false;
 	return true;
 }
 
-static
-read_page_from_file () {
-
+/* 남은 파일 크기로 이번 페이지에서 읽을 바이트 수를 구한다 (0 ~ PGSIZE). */
+static size_t
+bytes_to_read (off_t file_left) {
+	size_t read_bytes = file_left <= 0 ? 0: file_left < PGSIZE ? file_left : PGSIZE;	
+	return read_bytes;
 }
 
-
-/* Do the mmap */
+/* 파일을 addr부터 length만큼 페이지 단위로 SPT에 등록한다 (지연 로딩).
+   실제 매핑과 파일 읽기는 첫 page fault 때 일어난다. 성공하면 시작 주소를 반환한다. */
 void *
 do_mmap (void *addr, size_t length, int writable, struct file *fd_file, off_t offset) {
 	if (!is_valid_mmap (addr, length, fd_file, offset))
 		return NULL;
 	void *start = addr;
+	/* offset 이후 파일에 남은 바이트 수 */
 	lock_acquire (&filesys_lock);
 	off_t file_left = file_length (fd_file) - offset;
 	lock_release (&filesys_lock);
-	size_t done = 0;
-	while (done < length) {
-		size_t read_bytes = file_left <= 0 ? 0
-											: file_left < PGSIZE ? file_left : PGSIZE;
-		lock_acquire (&filesys_lock);
-		struct file *backing_file = file_reopen (fd_file);  
-		if (backing_file == NULL)
-			return NULL;
-		lock_release (&filesys_lock);
+	size_t done = 0 ;
+	while (done < length) {	
+		size_t read_bytes = bytes_to_read(file_left);
+		/* 사용자가 fd를 close해도 유지되도록 페이지 전용 파일을 연다 */
+		struct file *backing_file = make_backing_file(fd_file);
 		struct aux *aux = make_lazy_load_aux(backing_file, offset, read_bytes, PGSIZE - read_bytes, duplicate_mmap_arg);
 		if (!vm_alloc_page_with_initializer (VM_FILE, addr, writable, lazy_load_mmap, aux))
 			return NULL;
-		addr += PGSIZE;
-		offset += read_bytes;
-		file_left -= read_bytes;
+		addr += PGSIZE;  
+		offset += PGSIZE;  
+		file_left -= read_bytes;  
 		done += PGSIZE;
 	}
 	return start;
 }
 
+/* 페이지(메모리)가 수정됐으면 파일에 다시 쓰고, dirty 비트를 끈다. */
 static void
 write_back_if_dirty (struct page *page) {
 	struct thread *cur = thread_current();
 	struct file_page *info = &page->file;
 	if (!pml4_is_dirty (cur->pml4, page->va)) 
-		return false;
+		return;
 	lock_acquire(&filesys_lock);
 	file_write_at(info->backing_file, page->frame->kva, info->read_bytes, info->offset);
 	lock_release(&filesys_lock);
 	pml4_set_dirty (cur->pml4, page->va, false);
 }
 
-static void
-close_backing_file (struct page *page) {
-	struct file_page *info = &page->file;
+/* backing_file을 닫는다. */
+void
+close_backing_file (struct file *backing_file) {
 	lock_acquire(&filesys_lock);
-	file_close(info->backing_file);
+	file_close(backing_file);
 	lock_release(&filesys_lock);
 }
 
@@ -160,22 +168,23 @@ file_backed_destroy (struct page *page) {
 	if (page->frame != NULL) {
 		write_back_if_dirty(page);
 		release_frame(page->frame, cur->pml4);
-	close_backing_file(page);
 	}
+	close_backing_file(info->backing_file);
 }
 
-static bool
+/* page가 있고 파일 페이지(VM_FILE)인가. UNINIT이면 나중에 될 타입으로 판단한다. */
+bool
 is_file_backed_page(struct page *page) {
 	return page != NULL && page_get_type (page) == VM_FILE;
 }
 
-/* Do the munmap */
+/* addr부터 연속된 파일 페이지를 SPT에서 빼고 정리한다 (write-back, 프레임 반납, 파일 닫기) */
 void
 do_munmap (void *addr) {
 	struct supplemental_page_table *spt = &thread_current ()->spt;
 	for (;;) {
 		struct page *page = spt_find_page (spt, addr);
-		if (!is_file_backed_page)
+		if (!is_file_backed_page(page))
 			break;
 		spt_remove_page (spt, page);
 		vm_dealloc_page (page);
