@@ -7,7 +7,7 @@ struct page;
 enum vm_type;
 
 struct file_page {
-	struct file *mapped_file;
+	struct file *backing_file;
 	off_t offset;
 	size_t read_bytes;
 };

@@ -45,12 +45,13 @@ file_backed_swap_in (struct page *page, void *kva) {
 static bool
 file_backed_swap_out (struct page *page) {
 	struct file_page *file_page = &page->file;
+	//메모리가 부족해서 잠시 내보내는 곳
 }
 
 static bool
 lazy_load_mmap (struct page *page, void *aux) {
 	struct lazy_load_args *args = ((struct aux *) aux)->aux_pt;
-  page->file.mapped_file = args-> file;
+  page->file.backing_file = args-> file;
   page->file.offset = args-> ofs;
   page->file.read_bytes = args-> read_bytes;
   return lazy_load_segment(page, aux);
@@ -117,13 +118,13 @@ file_backed_destroy (struct page *page) {
 	if (page->frame != NULL) {
 		if (pml4_is_dirty (cur->pml4, page->va)) {
 			lock_acquire(&filesys_lock);
-			file_write_at(file_page->mapped_file, page->frame->kva, file_page->read_bytes, file_page->offset);
+			file_write_at(file_page->backing_file, page->frame->kva, file_page->read_bytes, file_page->offset);
 			lock_release(&filesys_lock);		
 		}
 		vm_remove_frame(page->frame, cur->pml4);
 	}
 	lock_acquire(&filesys_lock);
-	file_close(file_page->mapped_file);
+	file_close(file_page->backing_file);
 	lock_release(&filesys_lock);
 	}
 

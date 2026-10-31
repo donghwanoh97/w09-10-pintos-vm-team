@@ -131,7 +131,6 @@ void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	ASSERT(spt && page);
 	ASSERT(spt_find_page(spt, page->va) == page);
-
 	hash_delete(&spt->hash, &page->hash_elem);
 	vm_dealloc_page (page);
 }
@@ -283,13 +282,11 @@ vm_do_claim_page (struct page *page) {
 	struct frame *frame =vm_get_frame ();
   frame->page = page;
 	page->frame = frame;
-
   uint64_t *pml4 = thread_current()->pml4;
 	if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
 		vm_remove_frame(frame, pml4);
 		return false;
 	}
-
 	return swap_in (page, frame->kva);
 }
 
@@ -310,7 +307,6 @@ page_less (const struct hash_elem *a_,
            const struct hash_elem *b_, void *aux UNUSED) {
   const struct page *a = hash_entry (a_, struct page, hash_elem);
   const struct page *b = hash_entry (b_, struct page, hash_elem);
-
   return a->va < b->va;
 }
 
@@ -326,7 +322,6 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
                              struct supplemental_page_table *src) {
   struct hash_iterator i;
   hash_first (&i, &src->hash);
-
   while (hash_next (&i)) {
     struct hash_elem *e = hash_cur (&i);
     struct page *page = hash_entry(e, struct page, hash_elem);
@@ -382,7 +377,6 @@ page_destroy (struct hash_elem *e, void *aux UNUSED) {
     struct page *page = hash_entry(e, struct page, hash_elem);
     vm_dealloc_page(page);
 }
-
 
 /* 보조 페이지 테이블이 가진 자원을 해제한다 */
 void
