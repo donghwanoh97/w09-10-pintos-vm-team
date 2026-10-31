@@ -61,9 +61,9 @@ static void *
 duplicate_mmap_arg(void *aux) {
 	struct lazy_load_args *old_arg = ((struct aux *) aux)->aux_pt;
 	lock_acquire(&filesys_lock);
-	struct file *file = file_reopen(old_arg->file);
+	struct file *backing_file = file_reopen(old_arg->file);
 	lock_release(&filesys_lock);
-	return copy_lazy_load_aux(aux, file);
+	return copy_lazy_load_aux(aux, backing_file);
 }
 
 static bool
