@@ -85,21 +85,23 @@ is_valid_mmap (void *addr, size_t length, struct file *file, off_t offset) {
 
 /* Do the mmap */
 void *
-do_mmap (void *addr, size_t length, int writable, struct file *file, off_t offset) {
-	if (!is_valid_mmap (addr, length, file, offset))
+do_mmap (void *addr, size_t length, int writable, struct file *fd_file, off_t offset) {
+	if (!is_valid_mmap (addr, length, fd_file, offset))
 		return NULL;
 	void *start = addr;
 	lock_acquire (&filesys_lock);
-	off_t file_left = file_length (file) - offset;
+	off_t file_left = file_length (fd_file) - offset;
 	lock_release (&filesys_lock);
 	size_t done = 0;
 	while (done < length) {
 		size_t read_bytes = file_left <= 0 ? 0
 											: file_left < PGSIZE ? file_left : PGSIZE;
 		lock_acquire (&filesys_lock);
-		struct file *reopened = file_reopen (file);  
+		struct file *backing_file = file_reopen (fd_file);  
+		if (backing_file == NULL)
+			return NULL;
 		lock_release (&filesys_lock);
-		struct aux *aux = make_lazy_load_aux(reopened, offset, read_bytes, PGSIZE - read_bytes, duplicate_mmap_arg);
+		struct aux *aux = make_lazy_load_aux(backing_file, offset, read_bytes, PGSIZE - read_bytes, duplicate_mmap_arg);
 		if (!vm_alloc_page_with_initializer (VM_FILE, addr, writable, lazy_load_mmap, aux))
 			return NULL;
 		addr += PGSIZE;
