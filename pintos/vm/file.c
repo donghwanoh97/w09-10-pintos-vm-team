@@ -31,20 +31,20 @@ bool
 file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 	/* Set up the handler */
 	page->operations = &file_ops;
-	struct file_page *file_page = &page->file;
+	struct file_page *info = &page->file;
 	return true;
 }
 
 /* Swap in the page by read contents from the file. */
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
-	struct file_page *file_page = &page->file;
+	struct file_page *info = &page->file;
 }
 
 /* Swap out the page by writeback contents to the file. */
 static bool
 file_backed_swap_out (struct page *page) {
-	struct file_page *file_page = &page->file;
+	struct file_page *info = &page->file;
 	//메모리가 부족해서 잠시 내보내는 곳
 }
 
@@ -115,18 +115,18 @@ do_mmap (void *addr, size_t length, int writable, struct file *fd_file, off_t of
 /* Destroy the file backed page. PAGE will be freed by the caller. */
 static void
 file_backed_destroy (struct page *page) {
-	struct file_page *file_page = &page->file;
+	struct file_page *info = &page->file;
 	struct thread *cur = thread_current();
 	if (page->frame != NULL) {
 		if (pml4_is_dirty (cur->pml4, page->va)) {
 			lock_acquire(&filesys_lock);
-			file_write_at(file_page->backing_file, page->frame->kva, file_page->read_bytes, file_page->offset);
+			file_write_at(info->backing_file, page->frame->kva, info->read_bytes, info->offset);
 			lock_release(&filesys_lock);		
 		}
 		release_frame(page->frame, cur->pml4);
 	}
 	lock_acquire(&filesys_lock);
-	file_close(file_page->backing_file);
+	file_close(info->backing_file);
 	lock_release(&filesys_lock);
 	}
 
