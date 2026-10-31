@@ -39,6 +39,7 @@ file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
 	struct file_page *info = &page->file;
+	return true;
 }
 
 /* Swap out the page by writeback contents to the file. */
@@ -46,14 +47,19 @@ static bool
 file_backed_swap_out (struct page *page) {
 	struct file_page *info = &page->file;
 	//메모리가 부족해서 잠시 내보내는 곳
+	return true;
 }
 
-static bool
-lazy_load_mmap (struct page *page, void *aux) {
+static void
+save_file_into_page (struct page *page, void *aux) {
 	struct lazy_load_args *args = ((struct aux *) aux)->aux_pt;
   page->file.backing_file = args-> file;
   page->file.offset = args-> ofs;
   page->file.read_bytes = args-> read_bytes;
+}
+static bool
+lazy_load_mmap (struct page *page, void *aux) {
+	save_file_into_page(page,aux);
   return lazy_load_segment(page, aux);
 }
 
@@ -82,6 +88,12 @@ is_valid_mmap (void *addr, size_t length, struct file *fd_file, off_t offset) {
 			return false;
 	return true;
 }
+
+static
+read_page_from_file () {
+
+}
+
 
 /* Do the mmap */
 void *
