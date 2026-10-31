@@ -107,7 +107,7 @@ duplicate_mmap_arg(void *aux) {
 	return copy_lazy_load_aux(aux, backing_file);
 }
 
-/* mmap 인자가 유효한지 검사한다.
+/* munmap 인자가 유효한지 검사한다.
    주소·offset 정렬, 사용자 영역 여부, 파일 길이, 기존 페이지와의 겹침을 확인한다. */
 static bool
 is_valid_mmap (void *addr, size_t length, struct file *fd_file, off_t offset) {
@@ -124,6 +124,14 @@ is_valid_mmap (void *addr, size_t length, struct file *fd_file, off_t offset) {
 		if (spt_find_page (&thread_current ()->spt, addr + i) != NULL)
 			return false;
 	return true;
+}
+
+/* munmap 주소가 유효한지 검사한다: 페이지 정렬 + 파일 페이지 */
+static bool
+is_valid_munmap (void *addr) {
+	if (addr == NULL || pg_ofs (addr) != 0)
+		return false;
+	return is_file_backed_page(spt_find_page(&thread_current()->spt, addr));
 }
 
 /* 남은 파일 크기로 이번 페이지에서 읽을 바이트 수를 구한다 (0 ~ PGSIZE). */
@@ -209,6 +217,8 @@ is_file_backed_page(struct page *page) {
 /* addr부터 연속된 파일 페이지를 SPT에서 빼고 정리한다 (write-back, 프레임 반납, 파일 닫기) */
 void
 do_munmap (void *addr) {
+	if (!is_valid_munmap (addr))
+		return;
 	struct supplemental_page_table *spt = &thread_current ()->spt;
 	for (;;) {
 		struct page *page = spt_find_page (spt, addr);
