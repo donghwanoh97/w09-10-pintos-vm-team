@@ -75,7 +75,7 @@ struct initd_args {
 
 /* All members of this struct can be shallow-copied.
   Thus, the copy shares the same file object. */
-struct lazy_load_args {
+struct load_seg_args {
   struct file *file;
   off_t ofs;
   uint32_t read_bytes;
