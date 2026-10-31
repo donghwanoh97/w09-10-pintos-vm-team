@@ -326,7 +326,7 @@ void fd_table_close_all(void) {
 	cur->fd_table = NULL;
 }
 
-bool is_valid_file_args(void *addr, size_t length, int fd, off_t offset) {
+bool is_valid_mmap_args(void *addr, size_t length, int fd, off_t offset) {
 	uint64_t start_addr = (uint64_t)addr;
 	uint64_t end_addr = start_addr + length - 1;
 
@@ -344,6 +344,14 @@ bool is_valid_file_args(void *addr, size_t length, int fd, off_t offset) {
 
 	if (file_length(fd_get(fd)) == 0) return false; 
 	
+	return true;
+}
+
+bool is_valid_munmap_args(void *addr) {
+	if (addr == 0) return false;
+
+	if (addr != pg_round_down(addr)) return false;
+
 	return true;
 }
 
@@ -630,7 +638,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			int fd = f->R.r10;
 			off_t offset = f->R.r8;
 
-			if (!is_valid_file_args(addr, length, fd, offset)){
+			if (!is_valid_mmap_args(addr, length, fd, offset)){
 				f->R.rax = (uint64_t) NULL;
 				break;
 			}
@@ -655,6 +663,12 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		}
 		case SYS_MUNMAP: {
+			void* addr = f->R.rdi;
+			if (!is_valid_munmap_args(addr)) {
+				break;
+			}
+
+			do_munmap()
 
 			break;
 		}
