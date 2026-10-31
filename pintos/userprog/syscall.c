@@ -326,6 +326,34 @@ void fd_table_close_all(void) {
 	cur->fd_table = NULL;
 }
 
+bool is_valid_mmap_args(void *addr, size_t length, int fd, off_t offset) {
+	uint64_t start_addr = (uint64_t)addr;
+	uint64_t end_addr = start_addr + length - 1;
+
+	if (start_addr == 0 || offset < 0 || length == 0) return false;
+	
+	if (start_addr != (uint64_t)pg_round_down(start_addr) || offset % PGSIZE != 0) return false;
+
+	if (end_addr < start_addr) return false;
+
+	if (!is_user_vaddr(start_addr) || !is_user_vaddr(end_addr)) return false;
+
+	if (fd == 0 || fd == 1 || fd < 0 || fd >= FD_MAX) return false;
+
+	if (!fd_get(fd)) return false;
+
+	if (file_length(fd_get(fd)) == 0) return false; 
+	
+	return true;
+}
+
+bool is_valid_munmap_args(void *addr) {
+	if (addr == 0) return false;
+
+	if (addr != pg_round_down(addr)) return false;
+
+	return true;
+}
 
 
 /**
@@ -360,9 +388,10 @@ syscall_handler (struct intr_frame *f UNUSED) {
 	int fd = f->R.rdi;
 	switch (f->R.rax)
 	{
-		case SYS_HALT:
+		case SYS_HALT: {
 			power_off();
 			break;
+		}
 		case SYS_EXIT: {		/* exit(status) 첫 인자는 rdi로 전달 */
 			int status = (int)f->R.rdi;
 			struct thread *cur = thread_current();
@@ -378,10 +407,11 @@ syscall_handler (struct intr_frame *f UNUSED) {
 
 			thread_exit();		/* 내부에서 process_exit() 호출해 자원 정리하고 현재 스레드 종료 */
 		}
-		case SYS_FORK:
+		case SYS_FORK: {
 			f->R.rax = process_fork(f->R.rdi, f);
 			break;
-		case SYS_EXEC:
+		}
+		case SYS_EXEC: {
 			check_address(f->R.rdi);	
 			size_t len = strlen((char *)f->R.rdi) + 1;
 			char *k = palloc_get_page(0);
@@ -393,9 +423,11 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			f->R.rax = process_exec(k);
 			sys_exit(-1);
 			break;
-		case SYS_WAIT:
+		}
+		case SYS_WAIT: {
 			f->R.rax = process_wait(f->R.rdi);
 			break;
+		}
 		case SYS_CREATE: {
 			const char *create_file_name = (const char *)f->R.rdi;
 			unsigned initial_size = (unsigned)f->R.rsi;
@@ -592,11 +624,60 @@ syscall_handler (struct intr_frame *f UNUSED) {
 
 			break;
 		}
-		case SYS_CLOSE:
+		case SYS_CLOSE: {
 			fd_close(fd);	// 잘못된 fd나 이미 닫은 fd는 그냥 무시
 			break;
-		case SYS_DUP2:
+		}
+		case SYS_DUP2: {
 			break;
+		}
+		case SYS_MMAP: {
+			void* addr = f->R.rdi;
+			size_t length = f->R.rsi;
+			int writable = f->R.rdx;
+			int fd = f->R.r10;
+			off_t offset = f->R.r8;
+
+			if (!is_valid_mmap_args(addr, length, fd, offset)){
+				f->R.rax = (uint64_t) NULL;
+				break;
+			}
+			
+			lock_acquire(&filesys_lock);
+			struct file *file = file_reopen(fd_get(fd));
+			lock_release(&filesys_lock);
+
+			if (file == NULL) {
+				f->R.rax = (uint64_t) NULL;
+				break;
+			}
+
+			void *start_addr;
+
+			start_addr = do_mmap(addr, length, writable, file, offset);
+
+			if (start_addr == NULL) {
+				lock_acquire(&filesys_lock);
+				file_close(file);
+				lock_release(&filesys_lock);
+				
+				f->R.rax = (uint64_t) NULL;
+				break;
+			}
+
+			f->R.rax = (uint64_t) start_addr;
+			break;
+		}
+		case SYS_MUNMAP: {
+			void* addr = f->R.rdi;
+			if (!is_valid_munmap_args(addr)) {
+				break;
+			}
+
+			do_munmap(addr);
+
+			break;
+		}
 		default:
 			break;
 	}
