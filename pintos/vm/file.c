@@ -13,8 +13,8 @@ static void clear_alloc_failed_pages(void *start, void *failed);
 static void *duplicate_load_file_arg(void * aux);
 static void *malloc_with_panic(size_t size);
 
-static void check_swap_out(struct page *page);
-static void check_mm_file_free(struct mmap_file *mm_file);
+static void write_back_if_dirty(struct page *page);
+static void free_file_if_count_zero(struct mmap_file *mm_file);
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {
@@ -56,39 +56,44 @@ file_backed_swap_in (struct page *page, void *kva) {
 /* Swap out the page by writeback contents to the file. */
 static bool
 file_backed_swap_out (struct page *page) {
-	struct file_page *file_page = &page->file;
-  struct file *file = file_page->mmap_file->file;
+	write_back_if_dirty(page);
 
-  ASSERT(file != NULL);
-  off_t write_bytes = PGSIZE - file_page->zero_bytes;
-  lock_acquire(&filesys_lock);
-  file_write_at(file, page->va, write_bytes, file_page->offset);
-  lock_release(&filesys_lock);
+  return true;
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
 static void
 file_backed_destroy (struct page *page) {
-  check_swap_out(page);
+  unlink_frame_from_page(page->frame);
+  write_back_if_dirty(page);
 
   struct mmap_file *mmap_file = page->file.mmap_file;
   
   mmap_file->count --;
-  check_mm_file_free(mmap_file);
-  vm_remove_frame(page->frame, thread_current()->pml4);
+  free_file_if_count_zero(mmap_file);
 }
 
 static void
-check_swap_out(struct page *page){
+write_back_if_dirty(struct page *page){
   // TODO : 현재 스레드의 pml4를 사용하는 것이 항상 안전한지 swap 구현 후 확인하기
   if (pml4_is_dirty(thread_current()->pml4, page->va)){
-    file_backed_swap_out(page);
+    struct file_page *file_page = &page->file;
+    struct file *file = file_page->mmap_file->file;
+
+    ASSERT(file != NULL);
+    off_t write_bytes = PGSIZE - file_page->zero_bytes;
+    lock_acquire(&filesys_lock);
+    file_write_at(file, page->va, write_bytes, file_page->offset);
+    lock_release(&filesys_lock); 
     pml4_set_dirty(thread_current()->pml4, page->va, 0);
   }
+
+  remove_pte_from_pml4(page->frame, thread_current()->pml4);
+  unlink_frame_from_page(page->frame); 
 }
 
 static void
-check_mm_file_free(struct mmap_file *mm_file){
+free_file_if_count_zero(struct mmap_file *mm_file){
   if (mm_file->count == 0){
     lock_acquire(&filesys_lock);
     file_close(mm_file->file);

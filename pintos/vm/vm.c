@@ -167,9 +167,6 @@ vm_get_frame (void) {
 	return frame;
 }
 
-static void remove_pte_from_pml4(struct frame *frame, uint64_t *pml4);
-static void disconnect_page(struct frame *frame);
-
 /* frame->kva와 frame을 해제하고, page와의 연결을 끊는다.
   즉, frame과 page는 연결이 되어 있는 상태여야 한다.
   단, page의 메모리를 직접 해제하는 책임은 지지 않는다. */
@@ -180,7 +177,7 @@ vm_remove_frame(struct frame *frame, uint64_t *pml4){
   // TODO : frame table에서 해당 frame 제거
   remove_pte_from_pml4(frame, pml4); 
   palloc_free_page(frame->kva);
-  disconnect_page(frame);
+  unlink_frame_from_page(frame);
   free(frame);
 }
 
@@ -194,7 +191,7 @@ remove_pte_from_pml4(struct frame *frame, uint64_t *pml4){
 }
 
 static void
-disconnect_page(struct frame *frame){
+unlink_frame_from_page(struct frame *frame){
   struct page *page = frame->page;
   // 페이지가 자신을 바라볼 때만 연결 끊기
   if (page->frame == frame){
