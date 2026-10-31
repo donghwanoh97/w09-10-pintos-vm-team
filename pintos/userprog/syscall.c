@@ -643,7 +643,10 @@ syscall_handler (struct intr_frame *f UNUSED) {
 				break;
 			}
 			
+			lock_acquire(&filesys_lock);
 			struct file *file = file_reopen(fd_get(fd));
+			lock_release(&filesys_lock);
+
 			if (file == NULL) {
 				f->R.rax = (uint64_t) NULL;
 				break;
@@ -654,7 +657,10 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			start_addr = do_mmap(addr, length, writable, file, offset);
 
 			if (start_addr == NULL) {
+				lock_acquire(&filesys_lock);
 				file_close(file);
+				lock_release(&filesys_lock);
+				
 				f->R.rax = (uint64_t) NULL;
 				break;
 			}

@@ -111,8 +111,6 @@ lazy_load_file (struct page *page, void *aux) {
 
 	init_file_page(page, args);
 
-	uninit_free_aux((struct aux *) aux);
-
   return succ;
 }
 
@@ -132,7 +130,26 @@ static bool spt_remove_successive_pages(struct supplemental_page_table *spt, voi
 }
 
 static void *duplicate_file_arg(void * aux) {
-	// todo
+	struct aux *src = (struct aux *)aux;
+  struct file_args *old_arg = (struct file_args *)src->aux_pt;
+  
+  struct aux *dst = malloc(sizeof(struct aux));
+  if (!dst)
+    PANIC("kernel malloc failed.");
+
+  struct file_args *new_arg = malloc(sizeof(struct file_args));
+  if (!new_arg)
+    PANIC("kernel malloc failed.");
+  
+  dst->aux_pt = new_arg;
+  new_arg->ofs = old_arg->ofs;
+  new_arg->read_bytes = old_arg->read_bytes;
+  new_arg->zero_bytes = old_arg->zero_bytes;
+	new_arg->mmap_start_addr = old_arg->mmap_start_addr;
+  new_arg->mapped_file = thread_current()->using_file;
+	dst->duplicate_func = duplicate_file_arg;
+  
+  return (void *)dst;
 }
 
 /* Do the mmap */
