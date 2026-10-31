@@ -10,7 +10,10 @@
 #include "include/threads/vaddr.h"
 #include "include/threads/thread.h"
 #include "include/vm/vm.h"
+#include "vm/file.h"
+#include "userprog/syscall.h"
 #define PUSH_SIZE 8
+
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
 void
@@ -44,7 +47,24 @@ static struct frame *vm_get_victim (void);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_evict_frame (void);
 static page_initializer get_page_initializer(enum vm_type type);
+static struct supplemental_page_table * cur_spt(void) {return &thread_current()->spt;}
+
+/* 스택 성장 */
 static uintptr_t cur_user_rsp (struct intr_frame *f, bool user);
+static uintptr_t lowest_stack_addr (uintptr_t rsp, bool user);
+static bool is_stack_range (void *addr, uintptr_t rsp, bool user);
+static struct page *find_page_or_grow (struct intr_frame *f, void *addr, bool user);
+
+/* 해제 관련 */
+static void free_frame (struct frame *frame);
+
+/* 부모 페이지 타입별 자식 SPT 복사 */
+static bool try_copy_uninit(struct page *page);
+static bool try_copy_anon(struct page *page);
+static bool try_copy_file(struct page *page);
+
+/* aux에 저장된 duplicate_func로 aux를 복사 (try_copy_uninit에서 사용) */
+static struct aux *copy_aux(struct aux *aux);
 
 /* initializer와 함께 대기 중인(pending) 페이지 객체를 만든다.
  * 페이지를 만들고 싶다면 직접 만들지 말고 이 함수나
@@ -52,24 +72,19 @@ static uintptr_t cur_user_rsp (struct intr_frame *f, bool user);
 bool
 vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		vm_initializer *init, void *aux) {
-
 	ASSERT (VM_TYPE(type) != VM_UNINIT)
-
 	struct supplemental_page_table *spt = &thread_current ()->spt;
-
 	if (spt_find_page (spt, upage) == NULL) {
     struct page *page = malloc(sizeof(struct page));
-    if (!page) PANIC("kernal malloc failed");
-
+    if (!page) PANIC
+      ("kernal malloc failed");
     page_initializer initializer = get_page_initializer(type);
     uninit_new(page, upage, init, type, aux, initializer);
 		page->writable = writable;
-
     if (!spt_insert_page(spt, page)){
       vm_dealloc_page(page);
       return false;
     }
-    
     return true;
 	}
   else{
@@ -92,39 +107,32 @@ get_page_initializer(enum vm_type type){
 
 /* spt에서 VA를 찾아 페이지를 돌려준다. 실패하면 NULL을 돌려준다. */
 struct page *
-spt_find_page (struct supplemental_page_table *spt UNUSED, void *va UNUSED) {
+spt_find_page (struct supplemental_page_table *spt, void *va) {
 	ASSERT(spt);
-
   struct page *page = NULL;
 	struct page temp = {.va = pg_round_down(va)};
-
 	struct hash_elem *e = hash_find(&spt->hash, &temp.hash_elem); 
 	if (e != NULL)	  
     page = hash_entry(e, struct page, hash_elem);
-	
   return page;
 }
 
-/* 검증을 거쳐 PAGE를 spt에 넣는다. 주소 유효성 검증은 vm_try_handle_fault에서 처리하는 것으로 구현 */
+/* 검증을 거쳐 PAGE를 spt에 넣는다. */
 bool
-spt_insert_page (struct supplemental_page_table *spt UNUSED,
-		struct page *page UNUSED) {
+spt_insert_page (struct supplemental_page_table *spt, struct page *page) {
 	int succ = false;
-
 	struct hash_elem *old = hash_insert(&spt->hash, &page->hash_elem);
 	if (old == NULL)
 		succ = true;
-
   return succ;
 }
 
+/* SPT 해시에서 page->va에 해당하는 페이지를 제거한다. */
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	ASSERT(spt && page);
 	ASSERT(spt_find_page(spt, page->va) == page);
-
 	hash_delete(&spt->hash, &page->hash_elem);
-	vm_dealloc_page (page);
 }
 
 /* 내보낼(evict) struct frame을 고른다. */
@@ -157,49 +165,52 @@ vm_get_frame (void) {
 	void *kva = palloc_get_page(PAL_USER | PAL_ZERO);
 	if (!kva)
 		PANIC("todo"); // swap단계에서 vm_evict_frame으로 교체
-	
   frame = malloc(sizeof(struct frame));
 	ASSERT (frame != NULL);
-  
 	frame->kva = kva;
 	frame->page = NULL;
 	ASSERT (frame->page == NULL);
 	return frame;
 }
 
-static void remove_pte_from_pml4(struct frame *frame, uint64_t *pml4);
-static void disconnect_page(struct frame *frame);
-
-/* frame->kva와 frame을 해제하고, page와의 연결을 끊는다.
-  즉, frame과 page는 연결이 되어 있는 상태여야 한다.
-  단, page의 메모리를 직접 해제하는 책임은 지지 않는다. */
-void 
-vm_remove_frame(struct frame *frame, uint64_t *pml4){
-  ASSERT(frame);
-  ASSERT(frame->page);
-  // TODO : frame table에서 해당 frame 제거
-  remove_pte_from_pml4(frame, pml4); 
-  palloc_free_page(frame->kva);
-  disconnect_page(frame);
-  free(frame);
-}
-
-static void
+/* pml4에서 page->va의 PTE를 지운다. */
+void
 remove_pte_from_pml4(struct frame *frame, uint64_t *pml4){
   struct page *page = frame->page;
-  // remove frame 호출 과정에서, page->va에 해당하는 PTE가 가리키는 프레임이 frame과 불일치할 수 있음
+  // page->va의 pte가 이 frame을 가리킬 때만 지움
   if (pml4_get_page(pml4, page->va) == frame->kva){
       pml4_clear_page(pml4, page->va);
   }
 }
 
-static void
-disconnect_page(struct frame *frame){
+/* page와 frame 연결을 해제한다. */
+void
+unlink_page_and_frame(struct frame *frame){
   struct page *page = frame->page;
-  // 페이지가 자신을 바라볼 때만 연결 끊기
   if (page->frame == frame){
     page->frame = NULL;
+    frame->page = NULL;
   }
+}
+
+/* frame->kva(물리 메모리)와 frame 구조체를 반납한다. */
+static void
+free_frame (struct frame *frame) {
+  palloc_free_page (frame->kva);
+  free(frame);
+}
+
+/* 1) pml4에서 page->va의 PTE를 지우고, 
+2) page와 frame의 연결을 해제, 
+3) frame->kva(물리 메모리)와 frame 구조체를 반납한다. */
+void 
+release_frame(struct frame *frame, uint64_t *pml4){
+  ASSERT(frame);
+  ASSERT(frame->page);
+  remove_pte_from_pml4(frame, pml4); 
+  unlink_page_and_frame(frame);
+  // frame_table 지우기
+  free_frame(frame);
 }
 
 /* 스택을 키운다. */
@@ -238,14 +249,13 @@ is_stack (void *addr, uintptr_t rsp, bool user) {
 
 static struct page *
 find_page_or_grow (struct intr_frame *f, void *addr, bool user) {
-  struct supplemental_page_table *spt = &thread_current ()->spt;
-  struct page *page = spt_find_page(spt, addr);
+  struct page *page = spt_find_page(cur_spt(), addr);
   if (page != NULL)
     return page;
 	if (!is_stack(addr, cur_user_rsp(f, user), user))
       return NULL;
   vm_stack_growth(addr);
-	return spt_find_page(spt, addr);
+	return spt_find_page(cur_spt(), addr);
 }
 
 /* 폴트 유효성 검사에 성공하면 true */
@@ -254,12 +264,9 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 		bool user, bool write, bool not_present) {
 	if (!is_user_vaddr(addr) || !not_present)
 		return false;
-  
   struct page *page = find_page_or_grow(f, addr, user);
-
   if (page == NULL || (write && !page->writable))
 		return false;
-      
   return vm_do_claim_page (page);
 }
 
@@ -274,11 +281,9 @@ vm_dealloc_page (struct page *page) {
 /* VA에 할당된 페이지를 확보(claim)한다. */
 bool
 vm_claim_page (void *va) {
-	struct supplemental_page_table *spt = &thread_current()->spt;
-	struct page *page = spt_find_page(spt, va);
+	struct page *page = spt_find_page(cur_spt(), va);
 	if (page == NULL) 
 		return false;
-
   return vm_do_claim_page (page);
 }
 
@@ -288,17 +293,21 @@ vm_do_claim_page (struct page *page) {
 	struct frame *frame =vm_get_frame ();
   frame->page = page;
 	page->frame = frame;
-
   uint64_t *pml4 = thread_current()->pml4;
 	if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
-		vm_remove_frame(frame, pml4);
+		release_frame(frame, pml4);
 		return false;
 	}
-
 	return swap_in (page, frame->kva);
 }
 
-unsigned
+/* 페이지를 예약하고 바로 frame을 붙임 - lazy 하지 않음 */
+bool
+vm_alloc_and_claim (enum vm_type type, void *va, bool writable) {
+	return vm_alloc_page(type, va, writable) && vm_claim_page(va);
+}
+
+static uint64_t
 page_hash (const struct hash_elem *p_, void *aux UNUSED) {
 	const struct page *p = hash_entry (p_, struct page, hash_elem);
   return hash_bytes (&p->va, sizeof p->va);
@@ -309,7 +318,6 @@ page_less (const struct hash_elem *a_,
            const struct hash_elem *b_, void *aux UNUSED) {
   const struct page *a = hash_entry (a_, struct page, hash_elem);
   const struct page *b = hash_entry (b_, struct page, hash_elem);
-
   return a->va < b->va;
 }
 
@@ -320,25 +328,15 @@ supplemental_page_table_init (struct supplemental_page_table *spt) {
 		PANIC("SPT hash 초기화 실패");
 }
 
-static bool try_copy_uninit(struct page *page);
-static bool try_copy_anon(struct page *page);
-static bool try_copy_file(struct page *page);
-static struct aux *copy_aux(struct aux *aux);
-
-
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst,
                              struct supplemental_page_table *src) {
   struct hash_iterator i;
   hash_first (&i, &src->hash);
-
   while (hash_next (&i)) {
     struct hash_elem *e = hash_cur (&i);
     struct page *page = hash_entry(e, struct page, hash_elem);
-
-    enum vm_type type = VM_TYPE(page->operations->type);
-
-    switch (type)
+    switch (VM_TYPE(page->operations->type))
     {
     case VM_UNINIT:
       if (!try_copy_uninit(page)) return false;
@@ -356,35 +354,60 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
   return true;
 }
 
+/* aux의 사본을 만든다. aux 만들 때 등록한 duplicate_func에 따라서 */
+static struct aux *copy_aux(struct aux *aux){
+  if (aux == NULL) return NULL;
+  ASSERT(aux->duplicate_func);
+  return aux->duplicate_func(aux);
+}
+
+/* 부모 uninit 페이지를 자식에게 복사: aux 사본으로 UNINIT 등록 (로드는 나중에) */
 static bool
 try_copy_uninit(struct page *page){
   struct uninit_page *uninit = &page->uninit;
   struct aux * aux = uninit->aux;      
   struct aux * new_aux = copy_aux(aux);
-
-  return vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux) && vm_claim_page(page->va);
+  if (aux != NULL && new_aux == NULL)
+    return false;
+  return vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux);
 }
 
-static struct aux *copy_aux(struct aux *aux){
-  if (aux == NULL) return NULL;
-
-  ASSERT(aux->duplicate_func);
-  return aux->duplicate_func(aux);
-}
-
+/* 부모 anon 페이지를 자식에게 복사: 프레임 받고 내용 memcpy */
 static bool
 try_copy_anon(struct page *page){
   if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable))     
     return false;
-  struct page *new_page = spt_find_page(&thread_current()->spt, page->va);
+  struct page *new_page = spt_find_page(cur_spt(), page->va);
   memcpy(new_page->frame->kva, page->frame->kva, PGSIZE);
-
   return true;
 }
 
+/* 부모 file 페이지의 info를 자식에게 복사한다. backing_file은 자식용으로 새로 연다. */
 static bool
-try_copy_file(struct page *page){
-  return vm_alloc_and_claim(page->operations->type, page->va, page->writable);
+copy_file_info(struct page *page, struct page *child_page) {
+  struct file_page *parent_info = &page->file;
+  struct file_page *child_info = &child_page->file;
+  child_info->offset = parent_info->offset;
+  child_info->read_bytes = parent_info->read_bytes;
+  child_info->backing_file = make_backing_file(parent_info->backing_file);
+  if (child_info->backing_file == NULL)
+    return false;
+  return true;
+}
+
+/* 부모 file 페이지를 자식에게 복사: info 복사(backing_file은 새로 엶) + 내용 memcpy */
+static bool
+try_copy_file(struct page *page) {
+  /* 1. 자식 페이지 만들고 프레임을 받는다. */
+  if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable))
+			return false;
+  struct page *child_page = spt_find_page(cur_spt(), page->va);
+  /* 2. 부모의 파일 정보를 자식에게 채운다. 공유하면 안되는 것은 새로 만든다. */
+  if (!copy_file_info(page, child_page))
+    return false;
+  /* 3. 부모 메모리를 자식 메모리로 복사를 한다 */
+  memcpy(child_page->frame->kva, page->frame->kva, PGSIZE);
+  return true;  
 }
 
 /* 해시 요소에 해당하는 페이지를 정리한다. */
@@ -393,7 +416,6 @@ page_destroy (struct hash_elem *e, void *aux UNUSED) {
     struct page *page = hash_entry(e, struct page, hash_elem);
     vm_dealloc_page(page);
 }
-
 
 /* 보조 페이지 테이블이 가진 자원을 해제한다 */
 void

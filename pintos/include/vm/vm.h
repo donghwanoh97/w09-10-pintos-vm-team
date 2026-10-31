@@ -115,7 +115,9 @@ bool vm_try_handle_fault (struct intr_frame *f, void *addr, bool user,
 	vm_alloc_page_with_initializer ((type), (upage), (writable), NULL, NULL)
 bool vm_alloc_page_with_initializer (enum vm_type type, void *upage,
 		bool writable, vm_initializer *init, void *aux);
-void vm_remove_frame(struct frame *frame, uint64_t *pml4);
+void release_frame (struct frame *frame, uint64_t *pml4);
+void remove_pte_from_pml4 (struct frame *frame, uint64_t *pml4);   // 추가
+void unlink_page_and_frame (struct frame *frame);                  // 추가
 void vm_dealloc_page (struct page *page);
 bool vm_claim_page (void *va);
 bool vm_alloc_and_claim (enum vm_type type, void *va, bool writable);
