@@ -142,10 +142,6 @@ do_mmap (void *addr, size_t length, int writable, struct file *file, off_t offse
 	uint8_t* curr_page = addr;
 	off_t file_len = file_length (file);
 	size_t remaining = length;   /* 남은 매핑 길이 */
-	
-	if (!is_range_unmapped(addr, length)) {
-		return NULL;
-	}
 
 	while (remaining > 0) {
 		/* 이미 SPT에 있는 주소면, 지금까지 등록한 페이지를 되돌리고 실패 */
