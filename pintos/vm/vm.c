@@ -361,7 +361,7 @@ static struct aux *copy_aux(struct aux *aux){
   return aux->duplicate_func(aux);
 }
 
-/* uninit페이지 타입 fork (부모페이지->자식페이지)*/
+/* 부모 uninit 페이지를 자식에게 복사: aux 사본으로 UNINIT 등록 (로드는 나중에) */
 static bool
 try_copy_uninit(struct page *page){
   struct uninit_page *uninit = &page->uninit;
@@ -370,7 +370,7 @@ try_copy_uninit(struct page *page){
   return vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux);
 }
 
-/* anon페이지 타입 fork (부모페이지->자식페이지)*/
+/* 부모 anon 페이지를 자식에게 복사: 프레임 받고 내용 memcpy */
 static bool
 try_copy_anon(struct page *page){
   if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable))     
@@ -380,20 +380,26 @@ try_copy_anon(struct page *page){
   return true;
 }
 
-/* 부모 file 페이지를 자식에게 복사: 파일 정보(backing_file은 새로 엶) + 프레임 내용 memcpy */
+/* 부모 file 페이지의 info를 자식에게 복사한다. backing_file은 자식용으로 새로 연다. */
 static bool
-try_copy_file(struct page *page){
-  /* 1. 자식 페이지 만들고 프레임을 받는다. */
-  if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable))
-			return false;
-  struct page *child_page = spt_find_page(cur_spt(), page->va);
-  /* 2. 부모의 파일 정보를 자식에게 채운다. 공유하면 안되는 것은 새로 만든다. */
+copy_file_info(struct page *page, struct page *child_page) {
   struct file_page *parent_info = &page->file;
   struct file_page *child_info = &child_page->file;
   child_info->offset = parent_info->offset;
   child_info->read_bytes = parent_info->read_bytes;
   child_info->backing_file = make_backing_file(parent_info->backing_file);
-  if (child_info->backing_file == NULL)
+  return child_info->backing_file != NULL;
+}
+
+/* 부모 file 페이지를 자식에게 복사: info 복사(backing_file은 새로 엶) + 내용 memcpy */
+static bool
+try_copy_file(struct page *page) {
+  /* 1. 자식 페이지 만들고 프레임을 받는다. */
+  if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable))
+			return false;
+  struct page *child_page = spt_find_page(cur_spt(), page->va);
+  /* 2. 부모의 파일 정보를 자식에게 채운다. 공유하면 안되는 것은 새로 만든다. */
+  if (!copy_file_info(page, child_page))
     return false;
   /* 3. 부모 메모리를 자식 메모리로 복사를 한다 */
   memcpy(child_page->frame->kva, page->frame->kva, PGSIZE);
