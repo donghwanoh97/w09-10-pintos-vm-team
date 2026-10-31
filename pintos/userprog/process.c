@@ -690,7 +690,7 @@ static bool validate_segment (const struct Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		uint32_t read_bytes, uint32_t zero_bytes,
 		bool writable);
-static void *duplicate_lazy_load_arg(void * aux);
+static void *duplicate_load_seg_arg(void * aux);
 
 /**
  * @brief 명령줄 FILE_NAME의 ELF 실행 파일을 현재 스레드에 로드하고 인자를 유저 스택에 쌓음
@@ -1009,7 +1009,7 @@ install_page (void *upage, void *kpage, bool writable) {
 
 static bool
 lazy_load_segment (struct page *page, void *aux) {
-	struct lazy_load_args *args = (struct lazy_load_args *)((struct aux *) aux)->aux_pt;
+	struct load_seg_args *args = (struct load_seg_args *)((struct aux *) aux)->aux_pt;
   void *kva = page->frame->kva;
 
   lock_acquire(&filesys_lock);
@@ -1042,18 +1042,14 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	ASSERT (ofs % PGSIZE == 0);
 
 	while (read_bytes > 0 || zero_bytes > 0) {
-		/* 이 페이지를 어떻게 채울지 계산함.
-		 * FILE에서 PAGE_READ_BYTES 바이트를 읽고
-		 * 마지막 PAGE_ZERO_BYTES 바이트는 0으로 채울 것임. */
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		/* TODO: lazy_load_segment에 정보를 넘기기 위해 aux를 설정할 것. */
     struct aux *aux = malloc(sizeof(struct aux));
     if (!aux)
       PANIC("kernal malloc failed.");
 
-    struct lazy_load_args *args = malloc(sizeof (struct lazy_load_args));
+    struct load_seg_args *args = malloc(sizeof (struct load_seg_args));
     if (!args)
       PANIC("kernal malloc failed.");
     
@@ -1063,7 +1059,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
     args->zero_bytes = page_zero_bytes;
 
     aux->aux_pt = args;
-    aux->duplicate_func = duplicate_lazy_load_arg;
+    aux->duplicate_func = duplicate_load_seg_arg;
 
 		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
 					writable, lazy_load_segment, (void *)aux)){
@@ -1080,22 +1076,23 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 }
 
 static void *
-duplicate_lazy_load_arg(void * aux){
+duplicate_load_seg_arg(void * aux){
   struct aux *src = (struct aux *)aux;
-  struct lazy_load_args *old_arg = (struct lazy_load_args *)src->aux_pt;
+  struct load_seg_args *old_arg = (struct load_seg_args *)src->aux_pt;
   
   struct aux *dst = malloc(sizeof(struct aux));
   if (!dst)
     PANIC("kernel malloc failed.");
 
-  struct lazy_load_args *new_arg = malloc(sizeof(struct lazy_load_args));
+  struct load_seg_args *new_arg = malloc(sizeof(struct load_seg_args));
   if (!new_arg)
     PANIC("kernel malloc failed.");
   
   dst->aux_pt = new_arg;
-  new_arg->ofs = old_arg->ofs;
-  new_arg->read_bytes = old_arg->read_bytes;
-  new_arg->zero_bytes = old_arg->zero_bytes;
+  dst->duplicate_func = src->duplicate_func;
+
+  memcpy(new_arg, old_arg, sizeof(struct load_seg_args));
+  
   new_arg->file = thread_current()->using_file;
   
   return (void *)dst;

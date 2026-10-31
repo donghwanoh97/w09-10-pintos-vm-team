@@ -4,25 +4,31 @@
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
-#include "threads/loader.h"
-#include "userprog/gdt.h"
-#include "threads/flags.h"
-#include "intrinsic.h"
-#include "userprog/process.h"
-#include "threads/malloc.h"
-#include "filesys/file.h"
-#include "filesys/filesys.h"
 #include "threads/palloc.h"
 #include "threads/vaddr.h"
-#include "devices/input.h"
+#include "threads/loader.h"
+#include "threads/flags.h"
+#include "threads/malloc.h"
 #include "threads/init.h"
+#include "userprog/gdt.h"
+#include "userprog/process.h"
+#include "filesys/file.h"
+#include "filesys/filesys.h"
 #include "vm/vm.h"
+#include "intrinsic.h"
+#include "devices/input.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
 
 void check_address (const void *addr); 
+
+static void sys_mmap(struct intr_frame *f);
+static bool sys_munmap(struct intr_frame *f);
+static bool is_valid_mmap(void *addr, size_t length, struct file* file, off_t ofs);
+static bool is_valid_munmap(void *addr);
+static size_t get_read_length(struct file *file, size_t length);
 
 /* 시스템 콜(System call).
  *
@@ -597,7 +603,101 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_DUP2:
 			break;
+    case SYS_MMAP:
+      sys_mmap(f);
+      break; 
+    case SYS_MUNMAP:
+      sys_munmap(f);
+      break;
 		default:
 			break;
 	}
+}
+
+static void 
+sys_mmap(struct intr_frame *f){
+  void * addr = f->R.rdi;
+  size_t length = f->R.rsi;
+  int writable = f->R.rdx;
+  int fd = f->R.r10;
+  off_t offset = f->R.r8;
+
+  struct file *file = fd_get(fd);
+  void *ret = NULL;
+
+  if (is_valid_mmap(addr, length, file, offset)){
+    length = get_read_length(file, length);
+    ret = do_mmap(addr, length, writable, file, offset);
+  }
+  
+  f->R.rax = ret;
+}
+
+static bool is_valid_addr(void *addr, size_t length);
+static bool is_pg_aligned(void *addr, off_t ofs);
+static bool is_pg_available(void *addr, size_t length);
+
+static bool
+is_valid_mmap(void *addr, size_t length, struct file* file, off_t ofs){
+  if (length == 0) return false;
+  if (file == NULL) return false;
+
+  if (!is_valid_addr(addr, length)) return false;
+  if (!is_pg_aligned(addr, ofs)) return false;
+  if (!is_pg_available(addr, length)) return false;
+
+  return true;
+}
+
+static bool
+is_valid_addr(void *addr, size_t length){
+  if (length > UINT64_MAX - (uint64_t)addr) return false; 
+  if (!is_user_vaddr(addr)) return false;
+  if (!is_user_vaddr(addr + length)) return false;
+  
+  return true;
+}
+
+static bool
+is_pg_aligned(void *addr, off_t ofs){
+  if (pg_ofs(addr) != 0) return false;
+  if (pg_ofs(ofs) != 0) return false;
+  
+  return true;
+}
+
+static bool
+is_pg_available(void *addr, size_t length){
+  if (spt_find_page(&thread_current()->spt, addr) != NULL) 
+    return false; 
+
+  if (spt_find_page(&thread_current()->spt, pg_round_down(addr + length)) != NULL) 
+    return false;
+  
+  return true;  
+}
+
+static size_t
+get_read_length(struct file *file, size_t length){
+  lock_acquire(&filesys_lock);
+  size_t size = file_length(file);
+  lock_release(&filesys_lock);
+
+  return size < length ? size : length;
+}
+
+static bool
+sys_munmap(struct intr_frame *f){
+  void *addr = f->R.rdi;
+
+  if (is_valid_munmap(addr)){
+    do_munmap(addr);
+  }
+}
+
+static bool
+is_valid_munmap(void *addr){
+  if (pg_ofs(addr) != 0) return false;
+
+  return is_mmap_addr(addr);
 }

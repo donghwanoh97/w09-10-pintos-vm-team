@@ -384,7 +384,18 @@ try_copy_anon(struct page *page){
 
 static bool
 try_copy_file(struct page *page){
-  return vm_alloc_and_claim(page->operations->type, page->va, page->writable);
+  if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable));
+    return false;
+  struct page *new_page = spt_find_page(&thread_current()->spt, page->va);
+  memcpy(new_page->frame->kva, page->frame->kva, PGSIZE);
+
+  // TODO : file 복사
+}
+
+static bool cmp_mm_file(struct page *old, struct page *new){
+  if (old->file.mmap_file == new->file.mmap_file){
+    
+  }
 }
 
 /* 해시 요소에 해당하는 페이지를 정리한다. */
