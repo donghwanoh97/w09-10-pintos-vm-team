@@ -67,12 +67,12 @@ duplicate_mmap_arg(void *aux) {
 }
 
 static bool
-is_valid_mmap (void *addr, size_t length, struct file *file, off_t offset) {
+is_valid_mmap (void *addr, size_t length, struct file *fd_file, off_t offset) {
 	if (addr == NULL || pg_ofs (addr) != 0 || length == 0 || offset % PGSIZE != 0
 	    || !is_user_vaddr (addr) || !is_user_vaddr (addr + length - 1))
 		return false;
 	lock_acquire (&filesys_lock);
-	off_t flen = file_length (file);
+	off_t flen = file_length (fd_file);
 	lock_release (&filesys_lock);
 	if (flen == 0)
 		return false;
