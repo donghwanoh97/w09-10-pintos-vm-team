@@ -10,8 +10,10 @@
 #include "include/threads/vaddr.h"
 #include "include/threads/thread.h"
 #include "include/vm/vm.h"
+#include "vm/file.h"
 #include "userprog/syscall.h"
 #define PUSH_SIZE 8
+
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
 void
@@ -378,10 +380,24 @@ try_copy_anon(struct page *page){
   return true;
 }
 
-/* file 페이지 타입 fork(부모페이지->자식페이지) */
+/* 부모 file 페이지를 자식에게 복사: 파일 정보(backing_file은 새로 엶) + 프레임 내용 memcpy */
 static bool
 try_copy_file(struct page *page){
-  return vm_alloc_and_claim (page->operations->type, page->va, page->writable);
+  /* 1. 자식 페이지 만들고 프레임을 받는다. */
+  if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable))
+			return false;
+  struct page *child_page = spt_find_page(cur_spt(), page->va);
+  /* 2. 부모의 파일 정보를 자식에게 채운다. 공유하면 안되는 것은 새로 만든다. */
+  struct file_page *parent_info = &page->file;
+  struct file_page *child_info = &child_page->file;
+  child_info->offset = parent_info->offset;
+  child_info->read_bytes = parent_info->read_bytes;
+  child_info->backing_file = make_backing_file(parent_info->backing_file);
+  if (child_info->backing_file == NULL)
+    return false;
+  /* 3. 부모 메모리를 자식 메모리로 복사를 한다 */
+  memcpy(child_page->frame->kva, page->frame->kva, PGSIZE);
+  return true;  
 }
 
 /* 해시 요소에 해당하는 페이지를 정리한다. */

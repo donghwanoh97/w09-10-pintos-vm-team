@@ -18,4 +18,5 @@ void *do_mmap(void *addr, size_t length, int writable, struct file *file, off_t 
 void do_munmap (void *va);
 void close_backing_file (struct file *backing_file);
 bool is_file_backed_page(struct page *page); 
+struct file *make_backing_file (struct file *src_file);
 #endif

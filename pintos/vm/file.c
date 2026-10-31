@@ -87,10 +87,12 @@ lazy_load_mmap (struct page *page, void *aux) {
 
 /* src_file을 가리키는 열린 파일(file)을 하나 더 만든다. 
 inode(디스크 실제 파일)은 공유된다 */
-static struct file *
+struct file *
 make_backing_file (struct file *src_file) {
 	lock_acquire(&filesys_lock);
 	struct file *backing_file = file_reopen(src_file);
+	if (backing_file == NULL)
+		return NULL;
 	lock_release(&filesys_lock);
 	return backing_file;
 }
@@ -147,15 +149,20 @@ do_mmap (void *addr, size_t length, int writable, struct file *fd_file, off_t of
 		size_t read_bytes = bytes_to_read(file_left);
 		/* 사용자가 fd를 close해도 유지되도록 페이지 전용 파일을 연다 */
 		struct file *backing_file = make_backing_file(fd_file);
+		if (backing_file == NULL)
+			goto fail;
 		struct aux *aux = make_lazy_load_aux(backing_file, offset, read_bytes, PGSIZE - read_bytes, duplicate_mmap_arg);
 		if (!vm_alloc_page_with_initializer (VM_FILE, addr, writable, lazy_load_mmap, aux))
-			return NULL;
+			goto fail;
 		addr += PGSIZE;  
 		offset += PGSIZE;  
 		file_left -= read_bytes;  
 		done += PGSIZE;
 	}
 	return start;
+fail:
+	do_munmap(start);
+	return NULL;
 }
 
 /* 페이지(메모리)가 수정됐으면 파일에 다시 쓰고, dirty 비트를 끈다. */
@@ -163,6 +170,8 @@ static void
 write_back_if_dirty (struct page *page) {
 	struct thread *cur = thread_current();
 	struct file_page *info = &page->file;
+	if (info->backing_file == NULL)
+		return;
 	if (!pml4_is_dirty (cur->pml4, page->va)) 
 		return;
 	lock_acquire(&filesys_lock);

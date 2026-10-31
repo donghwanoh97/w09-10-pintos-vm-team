@@ -113,7 +113,6 @@ copy_lazy_load_aux(void * aux, struct file *file){
 static void
 uninit_destroy (struct page *page) {
 	struct uninit_page *uninit = &page->uninit;
-	/* 로드 안 된 mmap 페이지: backing_file이 아직 aux에 있으므로 여기서 닫는다 */
 	if (is_file_backed_page(page) && uninit->aux != NULL) {
 		struct lazy_load_args *args = ((struct aux *) uninit->aux)->aux_pt;
 		close_backing_file(args->file);
