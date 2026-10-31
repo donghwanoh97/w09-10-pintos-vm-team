@@ -54,8 +54,6 @@ static bool is_stack_range (void *addr, uintptr_t rsp, bool user);
 static struct page *find_page_or_grow (struct intr_frame *f, void *addr, bool user);
 
 /* 해제 관련 */
-static void remove_pte_from_pml4(struct frame *frame, uint64_t *pml4);
-static void unlink_page_and_frame (struct frame *frame);
 static void free_frame (struct frame *frame);
 
 /* 부모 페이지 타입별 자식 SPT 복사 */
@@ -174,7 +172,7 @@ vm_get_frame (void) {
 }
 
 /* pml4에서 page->va의 PTE를 지운다. */
-static void
+void
 remove_pte_from_pml4(struct frame *frame, uint64_t *pml4){
   struct page *page = frame->page;
   // page->va의 pte가 이 frame을 가리킬 때만 지움
@@ -184,7 +182,7 @@ remove_pte_from_pml4(struct frame *frame, uint64_t *pml4){
 }
 
 /* page와 frame 연결을 해제한다. */
-static void
+void
 unlink_page_and_frame(struct frame *frame){
   struct page *page = frame->page;
   if (page->frame == frame){

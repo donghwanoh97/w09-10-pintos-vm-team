@@ -12,6 +12,7 @@ static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
 static void file_backed_destroy (struct page *page);
 static bool lazy_load_mmap (struct page *page, void *aux);
+static void write_back_if_dirty (struct page *page);
 
 /* DO NOT MODIFY this struct */
 static const struct page_operations file_ops = {
@@ -35,18 +36,36 @@ file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 	return true;
 }
 
+/* page->file 정보로 파일 내용을 kva에 읽고, 나머지는 0으로 채운다. (swap_in에서 사용) */
+static bool
+read_page_from_file (struct page *page, void *kva) {
+	struct file_page *info = &page->file;
+  lock_acquire(&filesys_lock);
+  bool succ = file_read_at (info->backing_file, kva, info->read_bytes, info->offset) == (off_t)info->read_bytes;
+  lock_release(&filesys_lock);
+  if (succ) memset (kva + info->read_bytes, 0, PGSIZE - info->read_bytes);
+  	return succ;
+
+}
 /* Swap in the page by read contents from the file. */
+/* 내보냈던 페이지를 다시 불러 온다 */
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
-	struct file_page *info = &page->file;
-	return true;
+	return read_page_from_file(page, kva);
 }
 
-/* Swap out the page by writeback contents to the file. */
+/* 메모리가 부족할 때 페이지를 잠시 내보낸다.
+   수정됐으면 파일에 쓰고(write-back), PTE를 지우고, page와 frame 연결을 끊는다.
+   프레임은 eviction 쪽이 재사용하므로 해제하지 않고,
+   backing_file은 swap_in에서 다시 읽어야 하므로 닫지 않는다. */
 static bool
 file_backed_swap_out (struct page *page) {
-	struct file_page *info = &page->file;
-	//메모리가 부족해서 잠시 내보내는 곳
+	struct frame *frame = page->frame;
+	if (frame == NULL) 
+		return true;
+	write_back_if_dirty(page);
+	remove_pte_from_pml4(frame, thread_current()->pml4); 
+ 	unlink_page_and_frame(frame);
 	return true;
 }
 
