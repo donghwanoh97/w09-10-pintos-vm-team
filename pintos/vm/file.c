@@ -63,12 +63,20 @@ lazy_load_mmap (struct page *page, void *aux) {
   return lazy_load_segment(page, aux);
 }
 
-static void *
-duplicate_mmap_arg(void *aux) {
-	struct lazy_load_args *old_arg = ((struct aux *) aux)->aux_pt;
+static struct file *
+open_backing_file (struct file *file) {
 	lock_acquire(&filesys_lock);
-	struct file *backing_file = file_reopen(old_arg->file);
+	struct file *backing_file = file_reopen(file);
 	lock_release(&filesys_lock);
+	return backing_file;
+}
+
+static void *
+duplicate_mmap_arg(struct page *page, void *aux) {
+	struct lazy_load_args *old_arg = ((struct aux *) aux)->aux_pt;
+	struct file *backing_file = open_backing_file(old_arg->file);	
+	if (backing_file == NULL)
+		return NULL;
 	return copy_lazy_load_aux(aux, backing_file);
 }
 
@@ -126,17 +134,18 @@ do_mmap (void *addr, size_t length, int writable, struct file *fd_file, off_t of
 
 static void
 write_back_if_dirty (struct page *page) {
-	struct file_page *info = &page->file;
 	struct thread *cur = thread_current();
-	if (pml4_is_dirty (cur->pml4, page->va)) {
-			lock_acquire(&filesys_lock);
-			file_write_at(info->backing_file, page->frame->kva, info->read_bytes, info->offset);
-			lock_release(&filesys_lock);
-	}
+	struct file_page *info = &page->file;
+	if (!pml4_is_dirty (cur->pml4, page->va)) 
+		return false;
+	lock_acquire(&filesys_lock);
+	file_write_at(info->backing_file, page->frame->kva, info->read_bytes, info->offset);
+	lock_release(&filesys_lock);
+	pml4_set_dirty (cur->pml4, page->va, false);
 }
 
 static void
-open_backing_file (struct page *page) {
+close_backing_file (struct page *page) {
 	struct file_page *info = &page->file;
 	lock_acquire(&filesys_lock);
 	file_close(info->backing_file);
@@ -151,7 +160,7 @@ file_backed_destroy (struct page *page) {
 	if (page->frame != NULL) {
 		write_back_if_dirty(page);
 		release_frame(page->frame, cur->pml4);
-	open_backing_file(page);
+	close_backing_file(page);
 	}
 }
 
