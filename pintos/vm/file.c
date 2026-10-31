@@ -160,7 +160,7 @@ close_backing_file (struct file *backing_file) {
 	lock_release(&filesys_lock);
 }
 
-/* Destroy the file backed page. PAGE will be freed by the caller. */
+/* 파일 페이지 정리: 프레임이 있으면 write-back 후 반납하고, backing_file은 항상 닫는다. (page는 호출자가 free) */
 static void
 file_backed_destroy (struct page *page) {
 	struct file_page *info = &page->file;
