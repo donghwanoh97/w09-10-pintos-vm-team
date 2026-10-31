@@ -148,6 +148,12 @@ do_mmap (void *addr, size_t length, int writable, struct file *file, off_t offse
 	}
 
 	while (remaining > 0) {
+		/* 이미 SPT에 있는 주소면, 지금까지 등록한 페이지를 되돌리고 실패 */
+		if (spt_find_page(spt, curr_page) != NULL) {
+			spt_remove_successive_pages(spt, addr, curr_page);
+			return NULL;
+		}
+
 		/* 이번 페이지가 담당하는 매핑 길이 */
 		size_t page_len = remaining < PGSIZE ? remaining : PGSIZE;
 
@@ -172,16 +178,12 @@ do_mmap (void *addr, size_t length, int writable, struct file *file, off_t offse
     aux->aux_pt = args;
     aux->duplicate_func = duplicate_file_arg;
 
-		if (spt_find_page(spt, curr_page) == NULL) {
-			bool is_page_allocated = vm_alloc_page_with_initializer(VM_FILE, curr_page, writable, lazy_load_file, aux);
+		bool is_page_allocated = vm_alloc_page_with_initializer(VM_FILE, curr_page, writable, lazy_load_file, aux);
 
-			if (!is_page_allocated) {
-				uninit_free_aux(aux);
-				
-				// spt에 등록했던 페이지 해제
-				spt_remove_successive_pages(spt, addr, curr_page);
-				return NULL;
-			}
+		if (!is_page_allocated) {			
+			// spt에 등록했던 페이지 해제
+			spt_remove_successive_pages(spt, addr, curr_page);
+			return NULL;
 		}
 
 		remaining -= page_len;
@@ -231,7 +233,7 @@ static void* get_mmap_file(struct page *page) {
 /* Do the munmap */
 void
 do_munmap (void *addr) {
-	struct supplemental_page_table *spt = thread_current ()->spt;
+	struct supplemental_page_table *spt = &thread_current ()->spt;
 	// addr spt 확인
 	struct page *page = spt_find_page(spt, addr);
 	if (!page) {
