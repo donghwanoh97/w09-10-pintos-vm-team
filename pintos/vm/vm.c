@@ -367,6 +367,8 @@ try_copy_uninit(struct page *page){
   struct uninit_page *uninit = &page->uninit;
   struct aux * aux = uninit->aux;      
   struct aux * new_aux = copy_aux(aux);
+  if (aux != NULL && new_aux == NULL)
+    return false;
   return vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux);
 }
 
@@ -388,7 +390,9 @@ copy_file_info(struct page *page, struct page *child_page) {
   child_info->offset = parent_info->offset;
   child_info->read_bytes = parent_info->read_bytes;
   child_info->backing_file = make_backing_file(parent_info->backing_file);
-  return child_info->backing_file != NULL;
+  if (child_info->backing_file == NULL)
+    return false;
+  return true;
 }
 
 /* 부모 file 페이지를 자식에게 복사: info 복사(backing_file은 새로 엶) + 내용 memcpy */
