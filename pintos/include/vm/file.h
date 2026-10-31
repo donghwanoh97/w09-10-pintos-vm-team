@@ -21,6 +21,7 @@ void do_munmap (void *va);
 
 bool is_mmap_addr(void *addr);
 struct file *reopen_file(struct file * file);
+struct mmap_file* duplicate_mmap_file(struct file *file);
 
 struct mmap_file{
   struct file *file;
@@ -34,5 +35,7 @@ struct load_file_args{
   uint32_t zero_bytes;
   void *mmap_addr;
 };
+
+#define AUX_TO_ARGS(aux_) ((struct load_file_args *)((struct aux *) (aux_))->aux_pt)
 
 #endif

@@ -122,5 +122,7 @@ bool vm_alloc_and_claim (enum vm_type type, void *va, bool writable);
 enum vm_type page_get_type (struct page *page);
 
 typedef bool (*page_initializer) (struct page *, enum vm_type, void *);
+bool
+is_file_head(enum vm_type type, struct page *parent);
 
 #endif  /* VM_VM_H */

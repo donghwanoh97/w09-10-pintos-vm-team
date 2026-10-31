@@ -324,7 +324,9 @@ static bool try_copy_uninit(struct page *page);
 static bool try_copy_anon(struct page *page);
 static bool try_copy_file(struct page *page);
 static struct aux *copy_aux(struct aux *aux);
-
+static struct page *get_head_page_file(struct page *parent);
+static bool uninit_is_file_head(struct page *parent);
+static bool file_is_file_head(struct page *parent);
 
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst,
@@ -384,19 +386,67 @@ try_copy_anon(struct page *page){
 
 static bool
 try_copy_file(struct page *page){
-  if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable));
-    return false;
-  struct page *new_page = spt_find_page(&thread_current()->spt, page->va);
-  memcpy(new_page->frame->kva, page->frame->kva, PGSIZE);
-
-  // TODO : file 복사
-}
-
-static bool cmp_mm_file(struct page *old, struct page *new){
-  if (old->file.mmap_file == new->file.mmap_file){
-    
+  
+  struct page *head = get_head_page_file(page);
+  struct page *current = NULL;
+  if (is_file_head(VM_FILE, page)){
+    current = head;
   }
+  else{
+    if (!vm_alloc_and_claim(page->operations->type, page->va, page->writable));
+      return false;
+
+    current = spt_find_page(&thread_current()->spt, page->va);
+  }
+  
+  current->file.head_page = head;
+  current->file.mmap_file = head->file.mmap_file;
+  current->file.offset = page->file.offset;
+  current->file.zero_bytes = page->file.zero_bytes;
 }
+
+static struct page *
+get_head_page_file(struct page *parent){
+  struct supplemental_page_table *spt = &thread_current()->spt;
+  void *head_addr = parent->file.head_page->va;
+  struct page *head = spt_find_page(spt, head_addr);
+  if (head == NULL){
+    if (!vm_alloc_and_claim(parent->operations->type, head_addr, parent->writable)){
+      return NULL;
+    }
+    head = spt_find_page(spt, head_addr);
+    head->file.mmap_file = duplicate_mmap_file(parent->file.mmap_file->file);
+
+  }
+  return head;
+}
+
+bool
+is_file_head(enum vm_type type, struct page *parent){
+  switch (type)
+  {
+  case VM_UNINIT:
+    return uninit_is_file_head(parent);
+  case VM_FILE:
+    return file_is_file_head(parent);
+  default:
+    ASSERT(false);
+    break;
+  }
+  return false;
+}
+
+static bool 
+uninit_is_file_head(struct page *parent){
+  struct load_file_args *args = AUX_TO_ARGS(parent->uninit.aux);
+  return args->mmap_addr == parent->va;
+}
+
+static bool
+file_is_file_head(struct page *parent){
+  return parent->file.head_page == parent;
+}
+
 
 /* 해시 요소에 해당하는 페이지를 정리한다. */
 static void

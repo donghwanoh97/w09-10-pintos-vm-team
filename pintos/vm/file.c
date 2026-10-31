@@ -5,8 +5,6 @@
 #include "threads/mmu.h"
 #include "userprog/syscall.h"
 
-#define AUX_TO_ARGS(aux_) ((struct load_file_args *)((struct aux *) (aux_))->aux_pt)
-
 static bool file_backed_swap_in (struct page *page, void *kva);
 static bool file_backed_swap_out (struct page *page);
 static void file_backed_destroy (struct page *page);
@@ -77,6 +75,7 @@ file_backed_destroy (struct page *page) {
   
   mmap_file->count --;
   check_mm_file_free(mmap_file);
+  vm_remove_frame(page->frame, thread_current()->pml4);
 }
 
 static void
@@ -84,6 +83,7 @@ check_swap_out(struct page *page){
   // TODO : 현재 스레드의 pml4를 사용하는 것이 항상 안전한지 swap 구현 후 확인하기
   if (pml4_is_dirty(thread_current()->pml4, page->va)){
     file_backed_swap_out(page);
+    pml4_set_dirty(thread_current()->pml4, page->va, 0);
   }
 }
 
@@ -215,6 +215,7 @@ static void clear_alloc_failed_pages(void *start, void *failed){
 
 static void *
 duplicate_load_file_arg(void * aux){
+  // 구현 중 (미완성)
   struct aux *src = (struct aux *)aux;
   struct load_file_args *old_arg = (struct load_file_args *)src->aux_pt;
 
@@ -226,9 +227,40 @@ duplicate_load_file_arg(void * aux){
 
   memcpy(new_arg, old_arg, sizeof(struct load_file_args));
 
-  //new_arg->file = new_file; TODO : get file;
-
   return (void *)dst;
+}
+
+static struct page *
+get_head_page_uninit(struct page *parent){
+  struct supplemental_page_table *spt = &thread_current()->spt;
+  void *head_addr = AUX_TO_ARGS(parent->uninit.aux)->mmap_addr;
+  struct page *head = spt_find_page(spt, head_addr);
+  if (head == NULL){
+    struct aux *new_aux = malloc_with_panic(sizeof(struct aux));
+    struct load_file_args *args = malloc_with_panic(sizeof(struct load_file_args));
+    struct mmap_file *mmap_file = duplicate_mmap_file(AUX_TO_ARGS(parent->uninit.aux)->file);
+    
+    new_aux->aux_pt = args;
+    new_aux->duplicate_func = duplicate_load_file_arg;
+    args->file = mmap_file;
+
+    if (!vm_alloc_page_with_initializer(parent->uninit.type, head_addr, parent->writable, lazy_load_file, new_aux)){
+      return NULL;
+    }
+    
+    head = spt_find_page(spt, head_addr);
+  }
+
+  return head;
+}
+
+struct mmap_file*
+duplicate_mmap_file(struct file *file){
+  struct mmap_file *mmap_file = malloc_with_panic(sizeof(struct mmap_file));
+  mmap_file->file = reopen_file(file);
+  mmap_file->count = 0;
+
+  return mmap_file;
 }
 
 static void *
