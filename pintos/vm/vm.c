@@ -10,7 +10,7 @@
 #include "include/threads/vaddr.h"
 #include "include/threads/thread.h"
 #include "include/vm/vm.h"
-#include "userprog/syscall.c"
+#include "userprog/syscall.h"
 #define PUSH_SIZE 8
 /* 각 하위 시스템의 초기화 코드를 불러서
  * 가상 메모리 하위 시스템을 초기화한다. */
@@ -55,7 +55,8 @@ static struct page *find_page_or_grow (struct intr_frame *f, void *addr, bool us
 
 /* 해제 관련 */
 static void remove_pte_from_pml4(struct frame *frame, uint64_t *pml4);
-static void disconnect_page(struct frame *frame);
+static void unlink_page_and_frame (struct frame *frame);
+static void free_frame (struct frame *frame);
 
 /* 부모 페이지 타입별 자식 SPT 복사 */
 static bool try_copy_uninit(struct page *page);
@@ -123,7 +124,6 @@ spt_insert_page (struct supplemental_page_table *spt, struct page *page) {
 	struct hash_elem *old = hash_insert(&spt->hash, &page->hash_elem);
 	if (old == NULL)
 		succ = true;
-
   return succ;
 }
 
@@ -132,7 +132,6 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 	ASSERT(spt && page);
 	ASSERT(spt_find_page(spt, page->va) == page);
 	hash_delete(&spt->hash, &page->hash_elem);
-	vm_dealloc_page (page);
 }
 
 /* 내보낼(evict) struct frame을 고른다. */
@@ -172,34 +171,38 @@ vm_get_frame (void) {
 	ASSERT (frame->page == NULL);
 	return frame;
 }
-/* frame->kva와 frame을 해제하고, page와의 연결을 끊는다.
-  즉, frame과 page는 연결이 되어 있는 상태여야 한다.
-  단, page의 메모리를 직접 해제하는 책임은 지지 않는다. */
-void 
-vm_remove_frame(struct frame *frame, uint64_t *pml4){
-  ASSERT(frame);
-  ASSERT(frame->page);
-  remove_pte_from_pml4(frame, pml4); 
-  palloc_free_page(frame->kva);
-  disconnect_page(frame);
-  free(frame);
-}
 
 static void
 remove_pte_from_pml4(struct frame *frame, uint64_t *pml4){
   struct page *page = frame->page;
-  // remove frame 호출 과정에서, page->va에 해당하는 PTE가 가리키는 프레임이 frame과 불일치할 수 있음
+  // page->va의 pte가 이 frame을 가리킬 때만 지움
   if (pml4_get_page(pml4, page->va) == frame->kva){
       pml4_clear_page(pml4, page->va);
   }
 }
 
 static void
-disconnect_page(struct frame *frame){
+unlink_page_and_frame(struct frame *frame){
   struct page *page = frame->page;
   if (page->frame == frame){
     page->frame = NULL;
+    frame->page = NULL;
   }
+}
+
+static void
+free_frame (struct frame *frame) {
+  palloc_free_page (frame->kva);
+  free(frame);
+}
+
+void 
+release_frame(struct frame *frame, uint64_t *pml4){
+  ASSERT(frame);
+  ASSERT(frame->page);
+  remove_pte_from_pml4(frame, pml4); 
+  unlink_page_and_frame(frame);
+  free_frame(frame);
 }
 
 /* 스택을 키운다. */
@@ -284,7 +287,7 @@ vm_do_claim_page (struct page *page) {
 	page->frame = frame;
   uint64_t *pml4 = thread_current()->pml4;
 	if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
-		vm_remove_frame(frame, pml4);
+		release_frame(frame, pml4);
 		return false;
 	}
 	return swap_in (page, frame->kva);
@@ -296,7 +299,7 @@ vm_alloc_and_claim (enum vm_type type, void *va, bool writable) {
 	return vm_alloc_page(type, va, writable) && vm_claim_page(va);
 }
 
-unsigned
+static uint64_t
 page_hash (const struct hash_elem *p_, void *aux UNUSED) {
 	const struct page *p = hash_entry (p_, struct page, hash_elem);
   return hash_bytes (&p->va, sizeof p->va);
@@ -367,7 +370,7 @@ try_copy_anon(struct page *page){
 }
 
 static bool
-try_copy_file(struct page *page, void *aux){
+try_copy_file(struct page *page){
   return vm_alloc_and_claim (page->operations->type, page->va, page->writable);
 }
 

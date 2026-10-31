@@ -1,12 +1,8 @@
 #ifndef USERPROG_SYSCALL_H
 #define USERPROG_SYSCALL_H
-
 #include "threads/synch.h"
-
-struct file;
-
 extern struct lock filesys_lock;
-
+struct file;
 #define FD_MAX 64	/* fd 테이블 칸 수 */
 
 void syscall_init (void);

@@ -121,12 +121,17 @@ file_backed_destroy (struct page *page) {
 			file_write_at(file_page->backing_file, page->frame->kva, file_page->read_bytes, file_page->offset);
 			lock_release(&filesys_lock);		
 		}
-		vm_remove_frame(page->frame, cur->pml4);
+		release_frame(page->frame, cur->pml4);
 	}
 	lock_acquire(&filesys_lock);
 	file_close(file_page->backing_file);
 	lock_release(&filesys_lock);
 	}
+
+static bool
+is_file_backed_page(struct page *page) {
+	return page != NULL && page_get_type (page) == VM_FILE;
+}
 
 /* Do the munmap */
 void
@@ -134,9 +139,10 @@ do_munmap (void *addr) {
 	struct supplemental_page_table *spt = &thread_current ()->spt;
 	for (;;) {
 		struct page *page = spt_find_page (spt, addr);
-		if (page == NULL || page_get_type (page) != VM_FILE)
+		if (!is_file_backed_page)
 			break;
 		spt_remove_page (spt, page);
+		vm_dealloc_page (page);
 		addr += PGSIZE;
 	}
 }
