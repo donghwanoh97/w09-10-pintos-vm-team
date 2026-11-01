@@ -107,8 +107,7 @@ void spt_remove_page (struct supplemental_page_table *spt, struct page *page);
 
 void vm_init (void);
 bool is_stack (void *addr, uintptr_t rsp, bool user);
-bool vm_try_handle_fault (struct intr_frame *f, void *addr, bool user,
-		bool write, bool not_present);
+bool vm_try_handle_fault (struct intr_frame *f, void *addr, bool user,bool write, bool not_present);
 
 /* 초기화 함수 없이 페이지를 만드는 간단한 버전 */
 #define vm_alloc_page(type, upage, writable) \
@@ -124,5 +123,4 @@ bool vm_alloc_and_claim (enum vm_type type, void *va, bool writable);
 enum vm_type page_get_type (struct page *page);
 
 typedef bool (*page_initializer) (struct page *, enum vm_type, void *);
-
 #endif  /* VM_VM_H */
