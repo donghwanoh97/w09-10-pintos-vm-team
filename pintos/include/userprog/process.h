@@ -10,7 +10,6 @@ int process_wait (tid_t);
 void process_exit (void);
 void process_activate (struct thread *next);
 #ifdef VM
-bool lazy_load_segment (struct page *page, void *aux);
 #endif
 /**
  * @brief 유저 프로그램이 exit(status)로 남긴 종료 상태 기록
@@ -75,10 +74,4 @@ struct initd_args {
     struct child_info *info;      /* initd가 self_info로 가져갈 기록 */
 };
 
-struct lazy_load_args {
-	struct file *file;
-	off_t ofs;
-	uint32_t read_bytes;
-	uint32_t zero_bytes;
-};
 #endif /* userprog/process.h */
