@@ -665,7 +665,7 @@ static bool validate_segment (const struct Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		uint32_t read_bytes, uint32_t zero_bytes,
 		bool writable);
-static void *duplicate_lazy_load_arg(void * aux);
+static void *duplicate_segment_aux (void *aux);
 
 /**
  * @brief 명령줄 FILE_NAME의 ELF 실행 파일을 현재 스레드에 로드하고 인자를 유저 스택에 쌓음
@@ -1003,7 +1003,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	while (read_bytes > 0 || zero_bytes > 0) {
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
-    struct aux *aux = make_lazy_load_aux(file, ofs, page_read_bytes, page_zero_bytes, duplicate_lazy_load_arg);
+    struct aux *aux = create_lazy_load_aux(file, ofs, page_read_bytes, page_zero_bytes, duplicate_segment_aux);
 		if (!vm_alloc_page_with_initializer (VM_ANON, upage, writable, lazy_load_segment, (void *)aux)){ return false; }
     ofs += page_read_bytes;
 		read_bytes -= page_read_bytes;
@@ -1013,10 +1013,10 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	return true;
 }
 
-/* 실행 페이지의 aux 사본 (fork시 자식용) */
+/* 실행 파일 segment 페이지의 aux 사본. 자식의 using_file을 쓴다 */
 static void *
-duplicate_lazy_load_arg(void *aux) { 
-	return copy_lazy_load_aux(aux, thread_current()->using_file);
+duplicate_segment_aux (void *aux) {
+	return duplicate_lazy_load_aux (aux, thread_current ()->using_file);
 }
 
 /* USER_STACK 위치에 첫 스택 페이지 하나를 생성함. 성공하면 true를 반환함. */
