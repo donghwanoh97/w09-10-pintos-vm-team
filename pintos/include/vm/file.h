@@ -6,6 +6,21 @@
 struct page;
 enum vm_type;
 
+struct mmap_file{
+  struct file *file;
+  int count;
+};
+
+struct load_file_args{
+  struct mmap_file *file;
+  void *mmap_addr;
+  off_t ofs;
+  uint32_t read_bytes;
+  uint32_t zero_bytes;
+  bool is_head;
+  bool writable;
+};
+
 struct file_page {
   struct mmap_file *mmap_file;
   struct page *head_page;
@@ -15,6 +30,7 @@ struct file_page {
 
 void vm_file_init (void);
 bool file_backed_initializer (struct page *page, enum vm_type type, void *kva);
+void set_file_page(struct page *page, struct load_file_args *args);
 void *do_mmap(void *addr, size_t length, int writable,
 		struct file *file, off_t offset);
 void do_munmap (void *va);
@@ -22,19 +38,6 @@ void do_munmap (void *va);
 bool is_mmap_addr(void *addr);
 struct file *reopen_file(struct file * file);
 struct mmap_file* duplicate_mmap_file(struct file *file);
-
-struct mmap_file{
-  struct file *file;
-  int count;
-};
-
-struct load_file_args{
-  struct mmap_file *file;
-  off_t ofs;
-  uint32_t read_bytes;
-  uint32_t zero_bytes;
-  void *mmap_addr;
-};
 
 #define AUX_TO_ARGS(aux_) ((struct load_file_args *)((struct aux *) (aux_))->aux_pt)
 

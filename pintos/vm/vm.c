@@ -181,7 +181,7 @@ vm_remove_frame(struct frame *frame, uint64_t *pml4){
   free(frame);
 }
 
-static void
+void
 remove_pte_from_pml4(struct frame *frame, uint64_t *pml4){
   struct page *page = frame->page;
   // remove frame 호출 과정에서, page->va에 해당하는 PTE가 가리키는 프레임이 frame과 불일치할 수 있음
@@ -190,7 +190,7 @@ remove_pte_from_pml4(struct frame *frame, uint64_t *pml4){
   }
 }
 
-static void
+void
 unlink_frame_from_page(struct frame *frame){
   struct page *page = frame->page;
   // 페이지가 자신을 바라볼 때만 연결 끊기
@@ -320,6 +320,7 @@ supplemental_page_table_init (struct supplemental_page_table *spt) {
 static bool try_copy_uninit(struct page *page);
 static bool try_copy_anon(struct page *page);
 static bool try_copy_file(struct page *page);
+static bool is_alloced_head(enum vm_type type, void *va, void *aux);
 static struct aux *copy_aux(struct aux *aux);
 static struct page *get_head_page_file(struct page *parent);
 static bool uninit_is_file_head(struct page *parent);
@@ -361,8 +362,22 @@ try_copy_uninit(struct page *page){
   struct aux * aux = uninit->aux;      
   struct aux * new_aux = copy_aux(aux);
 
+  if(is_alloced_head(uninit->type, page->va, aux)){
+    return true;
+  }
+
   return vm_alloc_page_with_initializer(uninit->type, page->va, page->writable, uninit->init, new_aux) && vm_claim_page(page->va);
 }
+
+static bool
+is_alloced_head(enum vm_type type, void *va, void *aux){
+  if (VM_TYPE(type) != VM_FILE) return false;
+  if (!AUX_TO_ARGS(aux)->is_head) return false;
+  if (spt_find_page(&thread_current()->spt, va) == NULL) return false;
+
+  return true;
+ }
+
 
 static struct aux *copy_aux(struct aux *aux){
   if (aux == NULL) return NULL;
@@ -400,6 +415,8 @@ try_copy_file(struct page *page){
   current->file.mmap_file = head->file.mmap_file;
   current->file.offset = page->file.offset;
   current->file.zero_bytes = page->file.zero_bytes;
+
+  return true;
 }
 
 static struct page *
@@ -436,7 +453,7 @@ is_file_head(enum vm_type type, struct page *parent){
 static bool 
 uninit_is_file_head(struct page *parent){
   struct load_file_args *args = AUX_TO_ARGS(parent->uninit.aux);
-  return args->mmap_addr == parent->va;
+  return args->is_head;
 }
 
 static bool

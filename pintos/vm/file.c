@@ -11,6 +11,11 @@ static void file_backed_destroy (struct page *page);
 static bool lazy_load_file (struct page *page, void *aux);
 static void clear_alloc_failed_pages(void *start, void *failed);
 static void *duplicate_load_file_arg(void * aux);
+static struct load_file_args *get_head_args(struct load_file_args *args);
+static struct page *get_head_page(struct load_file_args *args);
+static struct page *create_head_page(struct load_file_args *args);
+static struct load_file_args *duplicate_new_load_file_args(struct load_file_args *original);
+struct mmap_file*duplicate_mmap_file(struct file *file);
 static void *malloc_with_panic(size_t size);
 
 static void write_back_if_dirty(struct page *page);
@@ -37,13 +42,22 @@ file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 
   struct load_file_args *args = AUX_TO_ARGS(page->uninit.aux);
 	
+  if (args){
+    set_file_page(page, args);
+  }
+
+	return true;
+}
+
+void
+set_file_page(struct page *page, struct load_file_args *args){
+  ASSERT(page && args);
+
   struct file_page *file_page = &page->file;
   file_page->mmap_file = args->file;
   file_page->offset = args->ofs;
   file_page->zero_bytes = args->zero_bytes;
   file_page->head_page = spt_find_page(&thread_current()->spt, args->mmap_addr);
-
-	return true;
 }
 
 /* Swap in the page by read contents from the file. */
@@ -58,14 +72,16 @@ static bool
 file_backed_swap_out (struct page *page) {
 	write_back_if_dirty(page);
 
+  remove_pte_from_pml4(page->frame, thread_current()->pml4);
+  unlink_frame_from_page(page->frame); 
   return true;
 }
 
 /* Destory the file backed page. PAGE will be freed by the caller. */
 static void
 file_backed_destroy (struct page *page) {
-  unlink_frame_from_page(page->frame);
   write_back_if_dirty(page);
+  vm_remove_frame(page->frame, thread_current()->pml4);
 
   struct mmap_file *mmap_file = page->file.mmap_file;
   
@@ -87,9 +103,6 @@ write_back_if_dirty(struct page *page){
     lock_release(&filesys_lock); 
     pml4_set_dirty(thread_current()->pml4, page->va, 0);
   }
-
-  remove_pte_from_pml4(page->frame, thread_current()->pml4);
-  unlink_frame_from_page(page->frame); 
 }
 
 static void
@@ -134,6 +147,7 @@ do_mmap (void *addr, size_t length, int writable,
     args->read_bytes = file_read_bytes;
     args->zero_bytes = file_zero_bytes;
     args->mmap_addr = mmap_addr;
+    args->is_head = (addr == mmap_addr);
 
     aux->aux_pt = args;
     aux->duplicate_func = duplicate_load_file_arg;
@@ -220,43 +234,85 @@ static void clear_alloc_failed_pages(void *start, void *failed){
 
 static void *
 duplicate_load_file_arg(void * aux){
-  // 구현 중 (미완성)
-  struct aux *src = (struct aux *)aux;
-  struct load_file_args *old_arg = (struct load_file_args *)src->aux_pt;
-
-  struct aux *dst = malloc_with_panic(sizeof(struct aux));  
-  struct load_file_args *new_arg = malloc_with_panic(sizeof (struct load_file_args));
+  struct load_file_args *parent_arg = AUX_TO_ARGS(aux);
+  struct load_file_args *head_arg = get_head_args(parent_arg);
+  struct mmap_file *head_file = head_arg->file;
   
-  dst->aux_pt = new_arg;
-  dst->duplicate_func = src->duplicate_func;
+  struct aux *parent_aux = (struct aux *)aux;
+  struct aux *new_aux = malloc_with_panic(sizeof(struct aux));  
+  struct load_file_args *new_arg;
 
-  memcpy(new_arg, old_arg, sizeof(struct load_file_args));
+  if (parent_arg->is_head){
 
-  return (void *)dst;
+    new_arg = head_arg;
+  }
+  else{ 
+    new_arg = malloc_with_panic(sizeof (struct load_file_args));
+  }
+  
+  new_aux->aux_pt = new_arg;
+  new_aux->duplicate_func = parent_aux->duplicate_func;
+
+  memcpy(new_arg, parent_arg, sizeof(struct load_file_args));
+  new_arg->file = head_file;
+
+  return (void *)new_aux;
+}
+
+static struct load_file_args *
+get_head_args(struct load_file_args *args){
+  struct supplemental_page_table *spt = &thread_current()->spt;
+
+  struct load_file_args *new_args = NULL;
+
+  if (args->is_head){
+    new_args = duplicate_new_load_file_args(args);
+  }
+  else{
+    struct page *head = get_head_page(args);
+    if (head == NULL) return NULL;
+
+    new_args = AUX_TO_ARGS(head->uninit.aux);
+  }
+
+  return new_args;
 }
 
 static struct page *
-get_head_page_uninit(struct page *parent){
+get_head_page(struct load_file_args *args){
   struct supplemental_page_table *spt = &thread_current()->spt;
-  void *head_addr = AUX_TO_ARGS(parent->uninit.aux)->mmap_addr;
-  struct page *head = spt_find_page(spt, head_addr);
-  if (head == NULL){
-    struct aux *new_aux = malloc_with_panic(sizeof(struct aux));
-    struct load_file_args *args = malloc_with_panic(sizeof(struct load_file_args));
-    struct mmap_file *mmap_file = duplicate_mmap_file(AUX_TO_ARGS(parent->uninit.aux)->file);
-    
-    new_aux->aux_pt = args;
-    new_aux->duplicate_func = duplicate_load_file_arg;
-    args->file = mmap_file;
-
-    if (!vm_alloc_page_with_initializer(parent->uninit.type, head_addr, parent->writable, lazy_load_file, new_aux)){
-      return NULL;
-    }
-    
-    head = spt_find_page(spt, head_addr);
-  }
+  struct page *head = spt_find_page(spt, args->mmap_addr);
+  if (head == NULL) head = create_head_page(args);
+  if (head == NULL) return NULL;
 
   return head;
+}
+
+static struct page *
+create_head_page(struct load_file_args *args){
+  struct supplemental_page_table *spt = &thread_current()->spt;
+  struct page *parent_head = spt_find_page(spt, args->mmap_addr);
+
+  struct load_file_args *new_args = duplicate_new_load_file_args(AUX_TO_ARGS(parent_head->uninit.aux));
+
+  struct aux *new_aux = malloc_with_panic(sizeof(struct aux));      
+  new_aux->aux_pt = new_args;
+  new_aux->duplicate_func = duplicate_load_file_arg;
+
+  if (!vm_alloc_page_with_initializer(VM_FILE, args->mmap_addr, args->writable, lazy_load_file, new_aux)){
+    return NULL;
+  }
+
+  return spt_find_page(spt, args->mmap_addr);
+}
+
+static struct load_file_args *
+duplicate_new_load_file_args(struct load_file_args *original){
+  struct load_file_args *args = malloc_with_panic(sizeof(struct load_file_args));
+  
+  memcpy(args, original, sizeof(struct load_file_args));
+  args->file = duplicate_mmap_file(original->file->file);
+  return args;
 }
 
 struct mmap_file*
