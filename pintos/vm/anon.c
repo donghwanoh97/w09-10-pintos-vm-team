@@ -55,6 +55,6 @@ anon_destroy (struct page *page) {
 	struct anon_page *anon_page = &page->anon;
 
   if (page->frame){ 
-    vm_remove_frame(page->frame, thread_current()->pml4);
+    release_frame(page->frame, thread_current()->pml4);
   }
 }
