@@ -36,10 +36,10 @@ static struct aux *copy_aux(struct aux *aux);
 static bool copy_frame_content (struct page *parent_page, struct page *child_page);
 static struct page *claim_child_page (struct page *parent_page);
 /* Frame Table */
-static struct list *frame_table;
-static struct list_elem *clock_hand;
-static struct lock frame_table_lock;
-
+static struct frame* create_frame(void *kva);
+struct list frame_table;
+struct list_elem *clock_hand;
+struct lock frame_table_lock;
 
 /* ───── 초기화 ───── */ 
 void
@@ -356,8 +356,8 @@ vm_do_claim_page (struct page *page) {
   frame->page = page;	page->frame = frame; 
   uint64_t *pml4 = page->pml4;
 
-	if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
-	release_frame(frame, pml4); return false; 
+  if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
+	  release_frame(frame, pml4); return false; 
   } 
 
   if (!swap_in (page, frame->kva)) {

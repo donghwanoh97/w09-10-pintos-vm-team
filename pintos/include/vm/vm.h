@@ -125,4 +125,10 @@ bool vm_alloc_and_claim (enum vm_type type, void *va, bool writable);
 enum vm_type page_get_type (struct page *page);
 
 typedef bool (*page_initializer) (struct page *, enum vm_type, void *);
+
+extern struct list frame_table;
+extern struct list_elem *clock_hand;
+extern struct lock frame_table_lock;
+
 #endif  /* VM_VM_H */
+
