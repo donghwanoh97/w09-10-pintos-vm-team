@@ -405,7 +405,8 @@ vm_do_claim_page (struct page *page) {
 
   uint64_t *pml4 = thread_current()->pml4;
 	if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
-	  release_frame(frame, pml4); return false; 
+	  release_frame(frame, pml4); 
+    return false; 
   } 
 
   bool succ = swap_in (page, frame->kva);
@@ -414,6 +415,9 @@ vm_do_claim_page (struct page *page) {
     lock_acquire(&frame_lock);
     list_push_back(&frame_table, &frame->ft_elem);
     lock_release(&frame_lock);
+  }
+  else{
+    release_frame(frame, page->pml4);
   }
 
   return succ; 
