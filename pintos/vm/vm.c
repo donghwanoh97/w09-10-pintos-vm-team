@@ -45,6 +45,7 @@ static struct lock frame_table_lock;
 void
 vm_init (void) {
 	vm_anon_init (); vm_file_init ();
+  list_init(&frame_table);
   lock_init(&frame_table_lock);
 #ifdef EFILESYS  /* Project 4용 */
 	pagecache_init ();
