@@ -97,7 +97,9 @@ static bool
 is_valid_offset (off_t offset) {
 	return offset % PGSIZE == 0;
 }
-static bool is_user_range (void *addr, size_t length) {
+
+static bool 
+is_user_range (void *addr, size_t length) {
 	void *end = addr + length - 1;
 	return end > addr && is_user_vaddr (addr) && is_user_vaddr (end);
 }
@@ -147,7 +149,7 @@ make_backing_file (struct file *src_file) {
 	lock_acquire(&filesys_lock);
 	struct file *backing_file = file_reopen(src_file);
 	lock_release(&filesys_lock);
-	if (backing_file == NULL) 
+	if (backing_file == NULL)
 		PANIC("file_reopen failed");
 	return backing_file; 
 }
@@ -171,6 +173,7 @@ lazy_load_mmap (struct page *page, void *aux) {
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
 	struct file_page *info = &page->file;
+	ASSERT(page->frame != NULL);
 	return read_file_into_frame(info->backing_file, info->offset, info->read_bytes, kva); 
 }
 
@@ -181,23 +184,24 @@ file_backed_swap_in (struct page *page, void *kva) {
 static bool
 file_backed_swap_out (struct page *page) {
 	struct frame *frame = page->frame;
-	if (frame == NULL) return true; // 프레임이 없으면 왜 리턴 트루지. 
+	ASSERT(frame!= NULL);
 	write_back_if_dirty(page); 
-	remove_pte_from_pml4(frame, thread_current()->pml4); 
- 	unlink_page_and_frame(frame); return true; 
+	remove_pte_from_pml4(frame, page->owner->pml4); 
+ 	unlink_page_and_frame(frame); 
+	return true; 
 }
 
 /* 페이지(메모리)가 수정됐으면 파일에 다시 쓰고, dirty 비트를 끈다. */
 static void
 write_back_if_dirty (struct page *page) {
-	struct thread *cur = thread_current(); 
 	struct file_page *info = &page->file;
+	uint64_t *pml4 = page->owner->pml4;
 	if (info->backing_file == NULL) return;
-	if (!pml4_is_dirty (cur->pml4, page->va)) return;
+	if (!pml4_is_dirty (pml4, page->va)) return;
 	lock_acquire(&filesys_lock);
 	file_write_at(info->backing_file, page->frame->kva, info->read_bytes, info->offset);
 	lock_release(&filesys_lock); 
-	pml4_set_dirty (cur->pml4, page->va, false); 
+	pml4_set_dirty (pml4, page->va, false); 
 }
 
 /* ── 5. SPT 복사 (fork 때 호출) ── */

@@ -22,7 +22,7 @@ struct uninit_page {
 	bool (*page_initializer) (struct page *, enum vm_type, void *kva);
 };
 
-/* lazy load 때 파일의 어디를 얼마나 읽을 지 (로드 후에는 Free)*/
+/* lazy load 때 파일의 어디를 얼마나 읽을 지 (로드 후에는 Free) */
 struct lazy_load_info {
 	struct file *file;
 	off_t ofs;
@@ -43,4 +43,4 @@ void uninit_new (struct page *page, void *va, vm_initializer *init,
 		enum vm_type type, void *aux,
 		bool (*initializer)(struct page *, enum vm_type, void *kva));
 void uninit_free_aux(struct aux *aux);
-#endif 0
+#endif
