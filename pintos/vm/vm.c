@@ -20,6 +20,7 @@ static page_initializer get_page_initializer(enum vm_type type);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_get_victim (void);
 static struct frame *vm_evict_frame (void);
+static struct frame* pop_frame_from_frame_table();
 /* 스택 성장 */
 static uintptr_t cur_user_rsp (struct intr_frame *f, bool user);
 static uintptr_t lowest_stack_addr (uintptr_t rsp, bool user);
@@ -246,20 +247,27 @@ set_frame_accessed(struct frame *frame){
 /* 페이지 하나를 내보내고 그 frame을 돌려준다. 실패하면 NULL을 돌려준다. */
 static struct frame *
 vm_evict_frame (void) {
-  lock_acquire(&frame_lock);
-  ASSERT(!list_empty(&frame_table));
-	struct frame *victim = vm_get_victim ();
-  remove_frome_frame_table(victim);    
-  lock_release(&frame_lock);
+  struct frame *victim = pop_frame_from_frame_table();
   
-  struct page *page = victim->page;
-  remove_pte_from_pml4(victim, page->pml4);
-	if (!swap_out(page))
+  remove_pte_from_pml4(victim, victim->page->pml4);
+	if (!swap_out(victim->page))
 	  return NULL; 
 
   unlink_page_and_frame(victim);
-
   memset(victim->kva, 0, PGSIZE);
+
+  return victim;
+}
+
+static struct frame*
+pop_frame_from_frame_table(){
+  lock_acquire(&frame_lock);
+
+  ASSERT(!list_empty(&frame_table));
+  struct frame *victim = vm_get_victim ();
+  remove_frome_frame_table(victim);   
+  
+  lock_release(&frame_lock);
 
   return victim;
 }
