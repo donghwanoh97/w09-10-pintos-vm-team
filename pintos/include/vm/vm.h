@@ -49,6 +49,7 @@ struct page {
 	const struct page_operations *operations;
 	void *va;              /* 유저 공간 기준의 주소 */
 	struct frame *frame;   /* frame을 거꾸로 가리키는 포인터 */
+	uint64_t *pml4; /* page를 사용하는 프로세스의 페이지 테이블 */
 
 	/* 여기에 직접 구현할 필드를 추가 */
 	struct hash_elem hash_elem;
@@ -69,6 +70,7 @@ struct page {
 struct frame {
 	void *kva;
 	struct page *page;
+	struct list_elem elem;
 };
 
 /* 페이지 동작을 위한 함수 표.
