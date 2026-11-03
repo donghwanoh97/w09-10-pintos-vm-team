@@ -82,6 +82,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		PANIC ("kernel malloc failed");
 	uninit_new (page, upage, init, type, aux, get_page_initializer (type));
 	page->writable = writable;
+  page->pml4 = thread_current ()->pml4;
 	if (!spt_insert_page (spt, page)) {
 		vm_dealloc_page (page);
 		return false;
