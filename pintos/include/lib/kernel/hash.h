@@ -28,6 +28,7 @@
 /* Hash element. */
 struct hash_elem {
 	struct list_elem list_elem;
+	struct list_elem elem;
 };
 
 /* Converts pointer to hash element HASH_ELEM into a pointer to

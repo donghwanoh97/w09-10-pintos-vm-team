@@ -75,8 +75,10 @@ lazy_load_segment (struct page *page, void *aux) {
 bool
 read_file_into_frame (struct file *file, off_t ofs, size_t read_bytes, void *kva) {
   lock_acquire(&filesys_lock);
-  bool succ = file_read_at (file, kva, read_bytes, ofs) == (off_t)read_bytes; lock_release(&filesys_lock);
-  if (succ) memset (kva + read_bytes, 0, PGSIZE - read_bytes); return succ; 
+  bool succ = file_read_at (file, kva, read_bytes, ofs) == (off_t)read_bytes; 
+	lock_release(&filesys_lock);
+  if (succ) memset (kva + read_bytes, 0, PGSIZE - read_bytes); 
+		return succ; 
 }
 
 /* 지연 로드에 쓸 정보(파일, 위치, 크기)를 담은 aux를 새로 만든다 (load_segment, do_mmap에서 사용). 

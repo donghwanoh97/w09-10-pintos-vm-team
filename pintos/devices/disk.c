@@ -234,10 +234,8 @@ disk_read (struct disk *d, disk_sector_t sec_no, void *buffer) {
 void
 disk_write (struct disk *d, disk_sector_t sec_no, const void *buffer) {
 	struct channel *c;
-
 	ASSERT (d != NULL);
 	ASSERT (buffer != NULL);
-
 	c = d->channel;
 	lock_acquire (&c->lock);
 	select_sector (d, sec_no);

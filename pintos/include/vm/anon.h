@@ -6,7 +6,8 @@ enum vm_type;
 
 struct anon_page {
   bool is_stack;
-  size_t swap_slot; /* 내보낸 칸 번호 */
+  size_t swap_slot_idx;
+  bool is_accessed;
 };
 
 #define IS_STACK(type) ((type) & VM_MARKER_0)
