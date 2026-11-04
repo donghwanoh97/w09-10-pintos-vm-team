@@ -181,23 +181,24 @@ file_backed_swap_in (struct page *page, void *kva) {
 static bool
 file_backed_swap_out (struct page *page) {
 	struct frame *frame = page->frame;
-	if (frame == NULL) return true; // 프레임이 없으면 왜 리턴 트루지. 
+	if (frame == NULL) {
+		ASSERT(page->frame != NULL);
+	} // 프레임이 없으면 왜 리턴 트루지. 
 	write_back_if_dirty(page); 
-	remove_pte_from_pml4(frame, thread_current()->pml4); 
- 	unlink_page_and_frame(frame); return true; 
+	remove_pte_from_pml4(frame, page->pml4); 
+	return true; 
 }
 
 /* 페이지(메모리)가 수정됐으면 파일에 다시 쓰고, dirty 비트를 끈다. */
 static void
 write_back_if_dirty (struct page *page) {
-	struct thread *cur = thread_current(); 
 	struct file_page *info = &page->file;
 	if (info->backing_file == NULL) return;
-	if (!pml4_is_dirty (cur->pml4, page->va)) return;
+	if (!pml4_is_dirty (page->pml4, page->va)) return;
 	lock_acquire(&filesys_lock);
 	file_write_at(info->backing_file, page->frame->kva, info->read_bytes, info->offset);
 	lock_release(&filesys_lock); 
-	pml4_set_dirty (cur->pml4, page->va, false); 
+	pml4_set_dirty (page->pml4, page->va, false); 
 }
 
 /* ── 5. SPT 복사 (fork 때 호출) ── */
@@ -218,6 +219,8 @@ file_backed_destroy (struct page *page) {
 	struct thread *cur = thread_current();
 	if (page->frame != NULL) { 
 		write_back_if_dirty(page);
+		
+		remove_frame_table_elem(&page->frame->elem);
 		release_frame(page->frame, cur->pml4); 
 	} 
 		close_backing_file(info->backing_file);

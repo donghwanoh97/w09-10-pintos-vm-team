@@ -94,20 +94,6 @@ anon_swap_out (struct page *page) {
 	return true;
 }
 
-void remove_frame_table_elem(struct list_elem* elem) {
-	lock_acquire(&frame_table_lock);
-
-	struct list_elem *next = list_remove (elem);
-	if (elem == clock_hand) {
-		if (next == list_end (&frame_table))
-			clock_hand = list_empty (&frame_table) ? NULL : list_begin (&frame_table);
-		else
-			clock_hand = next;
-	}
-
-	lock_release (&frame_table_lock);
-}
-
 /* Destroy the anonymous page. PAGE will be freed by the caller. */
 static void
 anon_destroy (struct page *page) {

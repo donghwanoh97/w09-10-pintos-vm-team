@@ -37,9 +37,24 @@ static bool copy_frame_content (struct page *parent_page, struct page *child_pag
 static struct page *claim_child_page (struct page *parent_page);
 /* Frame Table */
 static struct frame* create_frame(void *kva);
-struct list frame_table;
-struct list_elem *clock_hand;
-struct lock frame_table_lock;
+static struct list frame_table;
+static struct list_elem *clock_hand;
+static struct lock frame_table_lock;
+
+void 
+remove_frame_table_elem(struct list_elem* elem) {
+	lock_acquire(&frame_table_lock);
+
+	struct list_elem *next = list_remove (elem);
+	if (elem == clock_hand) {
+		if (next == list_end (&frame_table))
+			clock_hand = list_empty (&frame_table) ? NULL : list_begin (&frame_table);
+		else
+			clock_hand = next;
+	}
+
+	lock_release (&frame_table_lock);
+}
 
 /* ───── 초기화 ───── */ 
 void
@@ -232,8 +247,7 @@ vm_evict_frame (void) {
   }
 
   pml4_clear_page(victim->page->pml4, victim->page->va);
-  victim->page->frame = NULL;
-  victim->page = NULL;
+  unlink_page_and_frame(victim->page->frame);
 
   memset(victim->kva, 0, PGSIZE);
 
