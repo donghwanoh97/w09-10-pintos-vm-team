@@ -58,15 +58,14 @@ anon_swap_in (struct page *page, void *kva) {
 	if (idx == BITMAP_ERROR) return false;
 
 	lock_acquire(&swap_table_lock);
-	if (!bitmap_test(swap_table, idx)) {
-		lock_release(&swap_table_lock);
-		return false;
-	}
-	bitmap_reset(swap_table, idx);
+	bool is_swappable = bitmap_test(swap_table, idx);
+	
+	ASSERT(is_swappable);
 
 	for (size_t i = 0; i < PAGE_SECTOR_CNT; i++) {
 		disk_read(swap_disk, idx * PAGE_SECTOR_CNT + i ,kva + (DISK_SECTOR_SIZE * i));
 	}
+	bitmap_reset(swap_table, idx);
 
 	lock_release(&swap_table_lock);
 
