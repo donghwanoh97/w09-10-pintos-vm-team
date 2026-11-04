@@ -71,6 +71,7 @@ struct frame {
 	void *kva;
 	struct page *page;
 	struct list_elem elem;
+	bool pinned;
 };
 
 /* 페이지 동작을 위한 함수 표.

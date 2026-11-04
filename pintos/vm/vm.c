@@ -18,7 +18,7 @@ static struct frame *vm_get_frame (void);
 static struct frame *new_frame (void *kva);
 static struct frame *vm_evict_frame (void);
 static struct frame *vm_get_victim (void);
-static bool clock_second_chance (struct page *page);
+static bool give_second_chance (struct page *page);
 static struct list_elem *get_clock_pt (void);
 
 #define PUSH_SIZE 8   /* PUSH 명령이 rsp보다 8바이트 아래를 먼저 건드림 */
@@ -273,6 +273,7 @@ new_frame (void *kva) {
 	if (frame == NULL) PANIC ("kernel malloc failed");
 	frame->kva = kva;
 	frame->page = NULL;
+  frame->pinned = true;
 	lock_acquire (&frame_lock);
 	list_push_back (&frame_list, &frame->elem);
 	lock_release (&frame_lock);
@@ -295,8 +296,9 @@ vm_get_victim (void) {
 	lock_acquire (&frame_lock);
 	while (victim == NULL) {
 		struct frame *frame = list_entry (get_clock_pt(), struct frame, elem);
-		if (frame->page != NULL && !clock_second_chance (frame->page))
-			victim = frame;
+		if (frame->page != NULL && !give_second_chance (frame->page))
+    frame->pinned = true;
+    victim = frame;
 	}
 	lock_release (&frame_lock);
 	return victim;
@@ -304,7 +306,7 @@ vm_get_victim (void) {
 
 /* 최근에 썼으면 accessed를 끄고 한 번 봐준다(true). 안 썼으면 false */
 static bool
-clock_second_chance (struct page *page) {
+give_second_chance (struct page *page) {
 	uint64_t *pml4 = page->owner->pml4;
 	if (!pml4_is_accessed (pml4, page->va))
 		return false;
