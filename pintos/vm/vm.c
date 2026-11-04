@@ -251,10 +251,13 @@ vm_do_claim_page (struct page *page) {
     ASSERT(frame->page);
     remove_pte_from_pml4(frame, pml4);
     unlink_page_and_frame(frame);  
+    frame->pinned = false;
     return false; 
   } 
   // 여기서 실패할 경우 swap_in 매크로를 통해서 evict를 수행하게 된다. 
-  return swap_in (page, frame->kva); 
+  bool succ = swap_in (page, frame->kva);
+  frame->pinned = false;   /* 성공이든 실패든 채우기가 끝났으니 pin 해제 */
+  return succ;
 }
 
 /* ── 6. 프레임 할당 / eviction ── */
@@ -296,9 +299,10 @@ vm_get_victim (void) {
 	lock_acquire (&frame_lock);
 	while (victim == NULL) {
 		struct frame *frame = list_entry (get_clock_pt(), struct frame, elem);
-		if (frame->page != NULL && !give_second_chance (frame->page))
-    frame->pinned = true;
-    victim = frame;
+		if (frame->pinned || frame->page == NULL) continue;   /* 채우는 중인 프레임은 건너뜀 */
+		if (give_second_chance (frame->page)) continue;        /* 최근에 썼으면 한 번 봐줌 */
+		frame->pinned = true;
+		victim = frame;
 	}
 	lock_release (&frame_lock);
 	return victim;
