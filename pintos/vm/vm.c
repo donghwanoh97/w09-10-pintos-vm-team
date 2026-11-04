@@ -20,12 +20,14 @@ static page_initializer get_page_initializer(enum vm_type type);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_get_victim (void);
 static struct frame *vm_evict_frame (void);
+static struct frame* pop_frame_from_frame_table();
 /* 스택 성장 */
 static uintptr_t cur_user_rsp (struct intr_frame *f, bool user);
 static uintptr_t lowest_stack_addr (uintptr_t rsp, bool user);
 static bool is_stack_range (void *addr, uintptr_t rsp, bool user);
 static void vm_stack_growth (void *addr);
 /* 프레임 구조체 해제 */
+static void remove_frome_frame_table(struct frame *frame);
 static void free_frame (struct frame *frame);
 /* VM_TYPE별 COPY */
 static bool copy_uninit_page(struct page *parent_page);
@@ -35,6 +37,11 @@ static bool copy_info_and_reopen_file(struct page *parent_page, struct page *chi
 static struct aux *copy_aux(struct aux *aux);
 static bool copy_frame_content (struct page *parent_page, struct page *child_page);
 static struct page *claim_child_page (struct page *parent_page);
+
+static struct lock frame_lock;
+static struct list frame_table;
+static struct list_elem *clock_pt;
+
 /* ───── 초기화 ───── */ 
 void
 vm_init (void) {
@@ -44,7 +51,10 @@ vm_init (void) {
 #endif
 	register_inspect_intr ();
 	/* 위의 줄들은 수정하지 말 것. */
-	/* TODO: 여기에 코드를 작성. */ 
+	/* TODO: 여기에 코드를 작성. */
+  lock_init(&frame_lock); 
+  list_init(&frame_table);
+  clock_pt = list_head(&frame_table);
 }
 
 enum vm_type
@@ -74,6 +84,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		PANIC ("kernel malloc failed");
 	uninit_new (page, upage, init, type, aux, get_page_initializer (type));
 	page->writable = writable;
+  page->pml4 = thread_current()->pml4;
 	if (!spt_insert_page (spt, page)) {
 		vm_dealloc_page (page);
 		return false;
@@ -142,36 +153,123 @@ page_less (const struct hash_elem *a_,
 }
 
 /* ───── 프레임 ───── */  
+
+static struct frame * create_frame(void *kva);
+static struct list_elem *get_next_frame_elem(struct list_elem *elem);
+static struct frame *get_frame_from_ft_elem(struct list_elem *elem);
+static bool is_frame_accessed(struct frame *frame);
+static void set_frame_accessed(struct frame *frame);
+
+
 /* palloc()으로 frame을 얻는다. 사용 가능한 페이지가 없으면 페이지를 내보내고 그 frame을 돌려준다. 이 함수는 항상 유효한 주소를 돌려준다. 즉, user pool 메모리가 가득 차면 frame을 내보내서 사용 가능한 메모리 공간을 만든다. */
 static struct frame *
 vm_get_frame (void) {
 	struct frame *frame = NULL;
 	void *kva = palloc_get_page(PAL_USER | PAL_ZERO);
-	if (kva == NULL) 
-    PANIC("todo: vm_evict_frame()"); 
-  frame = malloc(sizeof(struct frame));
-  if (frame == NULL) PANIC("malloc failed");
+  
+  frame = (kva == NULL) ? vm_evict_frame() : create_frame(kva);
+    
 	ASSERT (frame != NULL); 
-  frame->kva = kva; 
-  frame->page = NULL;
 	ASSERT (frame->page == NULL); 
   return frame; 
+}
+
+static struct frame *
+create_frame(void *kva){
+  struct frame *frame = malloc(sizeof(struct frame));
+  if (frame == NULL) PANIC("malloc failed");
+
+  frame->kva = kva; 
+  frame->page = NULL;
+
+  frame->ft_elem.prev = NULL;
+  frame->ft_elem.next = NULL;
+
+  return frame;
 }
 
 /* 내보낼(evict) struct frame을 고른다. */
 static struct frame *
 vm_get_victim (void) {
-	struct frame *victim = NULL;
-	 /* TODO: 내보낼 frame을 고르는 정책은 자유롭게 정한다. */
+
+  struct frame *victim = NULL;
+	
+  struct list_elem *curr = clock_pt;
+  struct frame *frame;
+  bool accessed = false;
+
+  do{
+    curr = get_next_frame_elem(curr);
+    frame = get_frame_from_ft_elem(curr);
+    accessed = is_frame_accessed(frame);
+    if (accessed) set_frame_accessed(frame);
+  } while (accessed);
+
+  victim = frame;
+  clock_pt = curr;
+  
 	return victim; 
+}
+
+static struct list_elem *
+get_next_frame_elem(struct list_elem *elem){
+  struct list_elem *next = list_next(elem);
+  if (next == list_end(&frame_table))
+    next = list_begin(&frame_table);
+  
+  return next;
+}
+
+
+static struct frame *
+get_frame_from_ft_elem(struct list_elem *elem){
+  return list_entry(elem, struct frame, ft_elem);
+}
+
+static bool 
+is_frame_accessed(struct frame *frame){
+  ASSERT(frame);
+  ASSERT(frame->page);
+
+  struct page *page = frame->page;
+  return pml4_is_accessed(page->pml4, page->va);
+}
+
+static void
+set_frame_accessed(struct frame *frame){
+  ASSERT(frame);
+  ASSERT(frame->page);
+  
+  struct page *page = frame->page;
+  pml4_set_accessed(page->pml4, page->va, false);
 }
 
 /* 페이지 하나를 내보내고 그 frame을 돌려준다. 실패하면 NULL을 돌려준다. */
 static struct frame *
 vm_evict_frame (void) {
-	struct frame *victim = vm_get_victim ();
-	/* TODO: victim을 스왑 아웃하고 비워진 frame을 돌려준다. */
-	return NULL; 
+  struct frame *victim = pop_frame_from_frame_table();
+  
+  remove_pte_from_pml4(victim, victim->page->pml4);
+	if (!swap_out(victim->page))
+	  return NULL; 
+
+  unlink_page_and_frame(victim);
+  memset(victim->kva, 0, PGSIZE);
+
+  return victim;
+}
+
+static struct frame*
+pop_frame_from_frame_table(){
+  lock_acquire(&frame_lock);
+
+  ASSERT(!list_empty(&frame_table));
+  struct frame *victim = vm_get_victim ();
+  remove_frome_frame_table(victim);   
+  
+  lock_release(&frame_lock);
+
+  return victim;
 }
 
 /* 1) pml4에서 page->va 해당 칸 PTE를 지우고, 2) page와 frame의 연결을 해제, 3) frame->kva(물리 메모리)와 frame 구조체를 반납한다. */
@@ -179,11 +277,30 @@ void
 release_frame(struct frame *frame, uint64_t *pml4){
   ASSERT(frame); 
   ASSERT(frame->page); 
+
+  lock_acquire(&frame_lock);
+  remove_frome_frame_table(frame);
+  lock_release(&frame_lock);
+
   remove_pte_from_pml4(frame, pml4); 
   unlink_page_and_frame(frame);
-  // frame_table 지우기
   free_frame(frame); 
 }
+
+static void
+remove_frome_frame_table(struct frame *frame){
+  struct list_elem *elem = &frame->ft_elem;
+  if (elem->prev == NULL && elem->next == NULL) return;
+
+  if (elem == clock_pt) 
+    clock_pt = list_prev(elem);
+
+  list_remove(elem);
+
+  elem->prev = NULL;
+  elem->next = NULL;
+}
+
 
 /* pml4에서 page->va가 이 frame을 가리킬 때만, 이 칸 PTE를 지운다. */
 void
@@ -285,11 +402,25 @@ static bool
 vm_do_claim_page (struct page *page) {
 	struct frame *frame = vm_get_frame ();
   frame->page = page;	page->frame = frame; 
+
   uint64_t *pml4 = thread_current()->pml4;
 	if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
-	release_frame(frame, pml4); return false; 
+	  release_frame(frame, pml4); 
+    return false; 
   } 
-  return swap_in (page, frame->kva); 
+
+  bool succ = swap_in (page, frame->kva);
+
+  if (succ){
+    lock_acquire(&frame_lock);
+    list_push_back(&frame_table, &frame->ft_elem);
+    lock_release(&frame_lock);
+  }
+  else{
+    release_frame(frame, page->pml4);
+  }
+
+  return succ; 
 }
 
 /* 페이지를 예약하고 바로 frame을 붙임 - lazy 하지 않음 */
