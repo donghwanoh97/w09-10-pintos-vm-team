@@ -35,10 +35,33 @@ static bool copy_info_and_reopen_file(struct page *parent_page, struct page *chi
 static struct aux *copy_aux(struct aux *aux);
 static bool copy_frame_content (struct page *parent_page, struct page *child_page);
 static struct page *claim_child_page (struct page *parent_page);
+/* Frame Table */
+static struct frame* create_frame(void *kva);
+static struct list frame_table;
+static struct list_elem *clock_hand;
+static struct lock frame_table_lock;
+
+void 
+remove_frame_table_elem(struct list_elem* elem) {
+	lock_acquire(&frame_table_lock);
+
+	struct list_elem *next = list_remove (elem);
+	if (elem == clock_hand) {
+		if (next == list_end (&frame_table))
+			clock_hand = list_empty (&frame_table) ? NULL : list_begin (&frame_table);
+		else
+			clock_hand = next;
+	}
+
+	lock_release (&frame_table_lock);
+}
+
 /* ───── 초기화 ───── */ 
 void
 vm_init (void) {
 	vm_anon_init (); vm_file_init ();
+  list_init(&frame_table);
+  lock_init(&frame_table_lock);
 #ifdef EFILESYS  /* Project 4용 */
 	pagecache_init ();
 #endif
@@ -74,6 +97,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		PANIC ("kernel malloc failed");
 	uninit_new (page, upage, init, type, aux, get_page_initializer (type));
 	page->writable = writable;
+  page->pml4 = thread_current ()->pml4;
 	if (!spt_insert_page (spt, page)) {
 		vm_dealloc_page (page);
 		return false;
@@ -147,8 +171,12 @@ static struct frame *
 vm_get_frame (void) {
 	struct frame *frame = NULL;
 	void *kva = palloc_get_page(PAL_USER | PAL_ZERO);
-	if (kva == NULL) 
-    PANIC("todo: vm_evict_frame()"); 
+	frame = (kva == NULL) ? vm_evict_frame() : create_frame(kva);
+  return frame;
+}
+
+static struct frame* create_frame(void *kva) {
+	struct frame *frame = NULL;
   frame = malloc(sizeof(struct frame));
   if (frame == NULL) PANIC("malloc failed");
 	ASSERT (frame != NULL); 
@@ -162,7 +190,43 @@ vm_get_frame (void) {
 static struct frame *
 vm_get_victim (void) {
 	struct frame *victim = NULL;
-	 /* TODO: 내보낼 frame을 고르는 정책은 자유롭게 정한다. */
+
+  lock_acquire (&frame_table_lock);
+
+  if (list_empty(&frame_table)) {
+    lock_release(&frame_table_lock);
+    return NULL;
+  }
+
+  struct list_elem *curr = clock_hand;
+  if (curr == NULL || curr == list_end(&frame_table)) {
+    curr = list_begin(&frame_table);
+  }
+  
+  while (true) {
+    struct frame *f = list_entry(curr, struct frame, elem);
+    if (!pml4_is_accessed(f->page->pml4, f->page->va)) {
+      clock_hand = list_remove(curr);
+
+      if (clock_hand == list_end(&frame_table)) {
+        clock_hand = list_empty(&frame_table) ? NULL : list_begin(&frame_table);
+      }
+      f->elem.prev = NULL;
+      f->elem.next = NULL;
+      victim = f;
+      break;
+    } 
+
+    pml4_set_accessed(f->page->pml4, f->page->va, false);
+
+    curr = list_next(curr);
+
+    if (curr == list_end(&frame_table)) {
+      curr = list_begin(&frame_table);
+    }
+  }
+  
+  lock_release(&frame_table_lock);
 	return victim; 
 }
 
@@ -170,8 +234,24 @@ vm_get_victim (void) {
 static struct frame *
 vm_evict_frame (void) {
 	struct frame *victim = vm_get_victim ();
-	/* TODO: victim을 스왑 아웃하고 비워진 frame을 돌려준다. */
-	return NULL; 
+
+  if(!victim) {
+    return NULL;
+  }
+
+  if (!swap_out(victim->page)) {
+    lock_acquire(&frame_table_lock);
+    list_push_back(&frame_table, &victim->elem);
+    lock_release(&frame_table_lock);
+    return NULL;
+  }
+
+  pml4_clear_page(victim->page->pml4, victim->page->va);
+  unlink_page_and_frame(victim->page->frame);
+
+  memset(victim->kva, 0, PGSIZE);
+
+	return victim; 
 }
 
 /* 1) pml4에서 page->va 해당 칸 PTE를 지우고, 2) page와 frame의 연결을 해제, 3) frame->kva(물리 메모리)와 frame 구조체를 반납한다. */
@@ -181,7 +261,7 @@ release_frame(struct frame *frame, uint64_t *pml4){
   ASSERT(frame->page); 
   remove_pte_from_pml4(frame, pml4); 
   unlink_page_and_frame(frame);
-  // frame_table 지우기
+
   free_frame(frame); 
 }
 
@@ -279,17 +359,32 @@ vm_claim_page (void *va) {
 }
 
 /* 프레임을 받아 page와 연결하고, pml4에 va->kva를 등록한 뒤, swap_in으로 내용을 채운다.
-(UNINIT이면 파일에서 읽어 첫 로드, 쫓겨났던 페이지면 UNON의 경우 swap 디스크, FILE의 경우 
+(UNINIT이면 파일에서 읽어 첫 로드, 쫓겨났던 페이지면 ANON의 경우 swap 디스크, FILE의 경우 
 파일에서 다시 읽어 옴) */
 static bool
 vm_do_claim_page (struct page *page) {
 	struct frame *frame = vm_get_frame ();
+  if(!frame) {
+    return false;
+  }
+
   frame->page = page;	page->frame = frame; 
-  uint64_t *pml4 = thread_current()->pml4;
-	if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
-	release_frame(frame, pml4); return false; 
+  uint64_t *pml4 = page->pml4;
+
+  if (!pml4_set_page(pml4, page->va, frame->kva, page->writable)) {
+	  release_frame(frame, pml4); return false; 
   } 
-  return swap_in (page, frame->kva); 
+
+  if (!swap_in (page, frame->kva)) {
+    release_frame(frame, pml4); 
+    return false;
+  }
+  
+  lock_acquire(&frame_table_lock);
+  list_push_back(&frame_table, &frame->elem);
+  lock_release(&frame_table_lock);
+  
+  return true;
 }
 
 /* 페이지를 예약하고 바로 frame을 붙임 - lazy 하지 않음 */
